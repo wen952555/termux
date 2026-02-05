@@ -10,141 +10,126 @@ NC='\033[0m'
 BOT_FILE="bot.py"
 PM2_NAME="termux-bot"
 
-echo -e "${GREEN}=== Termux Telegram Bot 管理面板 ===${NC}"
+# --- 依赖检查函数 ---
 
-# 函数: 检查并安装 Termux API (Native Termux)
 check_termux_api() {
-    # 只有在存在 pkg 命令时（原生 Termux）才尝试安装
-    if command -v pkg &> /dev/null; then
+    # 仅在原生 Termux 环境下检查
+    if command -v pkg &> /dev/null && [ -d "/data/data/com.termux" ]; then
         if ! command -v termux-battery-status &> /dev/null; then
-            echo -e "${YELLOW}未检测到 termux-api 包，正在安装...${NC}"
-            pkg update && pkg install termux-api -y
+            echo -e "${YELLOW}>> 正在安装 termux-api...${NC}"
+            pkg update -y > /dev/null 2>&1 && pkg install termux-api -y > /dev/null 2>&1
         fi
     fi
 }
 
-# 函数: 检查并安装 Python
 check_python() {
     if ! command -v python &> /dev/null; then
-        echo -e "${YELLOW}未检测到 Python，正在安装...${NC}"
+        echo -e "${YELLOW}>> 正在安装 Python...${NC}"
         if command -v pkg &> /dev/null; then
-            pkg update && pkg install python -y
-        elif command -v apt &> /dev/null; then
+            pkg install python -y > /dev/null 2>&1
+        else
             sudo apt update && sudo apt install python3 python3-pip -y
-            if ! command -v python &> /dev/null; then
-                sudo ln -s $(which python3) /usr/bin/python
-            fi
+            # 尝试建立软链接
+            [ ! -f /usr/bin/python ] && sudo ln -s /usr/bin/python3 /usr/bin/python
         fi
     fi
-    echo -e "${BLUE}正在检查 Python 依赖...${NC}"
-    pip install -r requirements.txt
+    
+    # 简单检查是否安装了 telegram 库，如果没有则安装
+    if ! python -c "import telegram" &> /dev/null; then
+        echo -e "${BLUE}>> 安装 Python 依赖...${NC}"
+        pip install -r requirements.txt
+    fi
 }
 
-# 函数: 检查并安装 Node.js 和 PM2
 check_pm2() {
     if ! command -v pm2 &> /dev/null; then
-        echo -e "${YELLOW}未检测到 PM2，准备安装...${NC}"
-        
-        # 检查 Node.js
+        echo -e "${YELLOW}>> 正在安装进程守护工具 PM2...${NC}"
         if ! command -v npm &> /dev/null; then
-            echo -e "${YELLOW}未检测到 Node.js，正在安装...${NC}"
-            if command -v pkg &> /dev/null; then
-                pkg install nodejs -y
-            elif command -v apt &> /dev/null; then
-                sudo apt update && sudo apt install nodejs npm -y
-            else
-                echo -e "${RED}无法自动安装 Node.js，请手动安装后重试。${NC}"
-                return 1
-            fi
+             echo "   安装 Node.js..."
+             if command -v pkg &> /dev/null; then
+                pkg install nodejs -y > /dev/null 2>&1
+             else
+                sudo apt install nodejs npm -y
+             fi
         fi
-        
-        echo -e "${BLUE}正在通过 npm 安装 pm2...${NC}"
         npm install -g pm2
     fi
 }
 
-# 函数: 使用 PM2 启动
-start_pm2() {
+# --- 操作函数 ---
+
+start_bot() {
+    echo -e "${GREEN}=== Termux Telegram Bot 启动程序 ===${NC}"
     check_termux_api
     check_python
     check_pm2
-    
-    echo -e "${GREEN}正在使用 PM2 启动 Bot...${NC}"
-    
-    # 检查是否已经运行
-    pm2 describe $PM2_NAME > /dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        echo "Bot 已经在运行，正在重启..."
+
+    # 检查 PM2 状态
+    if pm2 describe $PM2_NAME > /dev/null 2>&1; then
+        echo -e "${BLUE}Bot 已经在运行，执行重启以应用更改...${NC}"
         pm2 restart $PM2_NAME
     else
-        # 启动新的进程
-        # 使用 python 解释器启动 bot.py
+        echo -e "${GREEN}正在启动 Bot 守护进程...${NC}"
         pm2 start $BOT_FILE --name $PM2_NAME --interpreter python
+        pm2 save
     fi
-    
-    pm2 save
-    echo -e "${GREEN}Bot 已在后台启动！${NC}"
-    echo "使用 'pm2 log $PM2_NAME' 查看日志。"
+    echo -e "${GREEN}✅ Bot 已在后台运行！${NC}"
+    echo "使用 './start_bot.sh log' 查看实时日志"
 }
 
-# 函数: 停止 PM2
-stop_pm2() {
+stop_bot() {
     pm2 stop $PM2_NAME
     echo -e "${YELLOW}Bot 已停止。${NC}"
 }
 
-# 函数: 查看日志
-view_logs() {
-    echo -e "${BLUE}正在打开日志 (按 Ctrl+C 退出)...${NC}"
+view_log() {
+    echo -e "${BLUE}正在连接日志 (Ctrl+C 退出)...${NC}"
     pm2 log $PM2_NAME
 }
 
-# 函数: 强制更新
-update_bot() {
-    echo -e "${BLUE}正在强制拉取最新代码...${NC}"
-    echo "这将会覆盖本地的修改。"
+force_update() {
+    echo -e "${YELLOW}正在强制更新代码...${NC}"
     git fetch --all
     git reset --hard origin/main
     git pull
     chmod +x start_bot.sh
-    echo -e "${GREEN}更新完成！请重新运行脚本。${NC}"
-    exit 0
+    echo -e "${GREEN}更新完成，正在重启 Bot...${NC}"
+    start_bot
 }
 
-# 主菜单
-echo "请选择操作:"
-echo "1) 🚀 使用 PM2 启动/重启 (后台运行，推荐)"
-echo "2) 📝 查看 PM2 日志"
-echo "3) 🛑 停止 PM2 服务"
-echo "4) 🐛 前台直接运行 (调试用)"
-echo "5) 🚪 退出"
-echo "6) 🔄 强制更新 Bot (修复 Git 冲突)"
+# --- 主逻辑 ---
 
-read -p "请输入选项 [1-6]: " choice
+# 读取第一个参数，默认为 start
+ACTION=${1:-start}
 
-case $choice in
-    1)
-        start_pm2
+case "$ACTION" in
+    start)
+        start_bot
         ;;
-    2)
-        view_logs
+    stop)
+        stop_bot
         ;;
-    3)
-        stop_pm2
+    restart)
+        start_bot
         ;;
-    4)
-        check_termux_api
-        check_python
-        echo -e "${GREEN}正在前台启动 Bot (按 Ctrl+C 停止)...${NC}"
-        python $BOT_FILE
+    log|logs)
+        view_log
         ;;
-    5)
-        exit 0
+    update)
+        force_update
         ;;
-    6)
-        update_bot
+    help)
+        echo "用法: ./start_bot.sh [命令]"
+        echo "命令列表:"
+        echo "  start   (默认) 检查环境并启动/重启 Bot"
+        echo "  stop    停止 Bot"
+        echo "  log     查看日志"
+        echo "  update  强制拉取最新代码并重启"
         ;;
     *)
-        echo "无效选项"
+        # 如果参数不匹配，尝试直接传递给 pm2 或者报错，这里直接报错比较安全
+        echo -e "${RED}未知命令: $ACTION${NC}"
+        echo "请使用 './start_bot.sh help' 查看帮助"
+        exit 1
         ;;
 esac

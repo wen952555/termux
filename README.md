@@ -2,38 +2,44 @@
 
 专为 Termux 和 Ubuntu (PRoot/Chroot) 环境设计的全能管理机器人。
 
-## 🔧 常见问题修复
+## 🚀 极速部署
+
+一条命令即可完成安装、环境配置和后台启动：
+
+```bash
+cd ~/termux && git pull && ./start_bot.sh
+```
+
+**脚本将自动执行以下操作：**
+1. 检查 Python、Termux API、PM2 等依赖。
+2. 自动安装缺失的包。
+3. 启动（或重启）后台守护进程。
+
+## 🎮 使用方法
+
+### 脚本命令
+不再需要手动选择菜单，直接使用参数控制：
+
+*   **启动/重启** (默认): `./start_bot.sh`
+*   **查看日志**: `./start_bot.sh log`
+*   **停止服务**: `./start_bot.sh stop`
+*   **强制更新**: `./start_bot.sh update` (解决 Git 冲突)
+
+### Telegram 机器人指令
+*   `/start` - 显示面板和菜单
+*   `/update` - **[新]** 远程更新 Bot 代码并自动重启
+*   `/ls` - 查看文件
+*   `/get <文件>` - 下载文件
+*   `/exec <命令>` - 执行 Shell 命令
+
+## ⚠️ 常见问题
 
 ### Git 冲突 (Merge Error)
-如果你在运行时遇到 `error: Your local changes...` 提示，这是因为你本地的文件与远程仓库不一致。
-
-**解决方法：**
-运行以下命令强制覆盖本地文件：
+如果在更新时遇到错误，可以使用 Bot 内的 `/update` 指令，或者在终端运行：
 ```bash
-git fetch --all && git reset --hard origin/main && git pull && chmod +x start_bot.sh
+./start_bot.sh update
 ```
+这将强制覆盖本地文件以保持与仓库同步。
 
-## 🚀 部署命令
-
-```bash
-# 1. 修复并更新
-git fetch --all && git reset --hard origin/main && git pull && chmod +x start_bot.sh
-
-# 2. 启动
-./start_bot.sh
-```
-
-## ⚠️ Termux API 说明
-
-要使用 **电池** 或 **拍照** 功能：
-1.  手机安装 **Termux:API** APP。
-2.  Termux 内安装 `termux-api` 包 (脚本会自动安装)。
-3.  **Ubuntu 用户**: 在 Ubuntu 内可能无法直接调用 API，建议在原生 Termux 环境下运行 Bot，或者配置 socket 穿透。
-
-## 功能列表
-
-*   **系统监控**: CPU、内存、磁盘、网络、进程。
-*   **📂 文件管理**: `/ls` 浏览, `/get` 下载, 直接发送文件上传。
-*   **硬件控制**: 电池状态、远程拍照。
-*   **服务探测**: 自动扫描常用端口。
-*   **进程守护**: PM2 自动重启。
+### Termux API
+要使用电池或拍照功能，请确保手机安装了 **Termux:API** 应用，并授予 Termux 相应权限。

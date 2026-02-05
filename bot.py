@@ -29,7 +29,7 @@ MENU_KEYBOARD = [
     [KeyboardButton("📊 系统状态"), KeyboardButton("📈 进程列表")],
     [KeyboardButton("📂 文件管理"), KeyboardButton("🛠 服务探测")],
     [KeyboardButton("🔋 电池信息"), KeyboardButton("📸 拍摄照片")],
-    [KeyboardButton("🐚 终端命令"), KeyboardButton("🔄 重启机器人")]
+    [KeyboardButton("🔄 检查更新"), KeyboardButton("🐚 终端命令")]
 ]
 
 def check_admin(user_id):
@@ -114,10 +114,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "例如: `/exec df -h`",
             parse_mode='Markdown'
         )
-    elif text == "🔄 重启机器人":
-        await restart_bot(update, context)
+    elif text == "🔄 检查更新":
+        await update_bot_command(update, context)
     elif text == "❓ 帮助":
         await start(update, context)
+
+async def update_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_admin(update.effective_user.id): return
+    
+    msg = await update.message.reply_text("🔄 正在从 GitHub 强制拉取更新...", parse_mode='Markdown')
+    
+    try:
+        # 执行 git 命令：强制重置并拉取
+        # 注意：这会丢弃本地对代码的直接修改
+        cmd = "git fetch --all && git reset --hard origin/main && git pull && chmod +x start_bot.sh"
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        
+        if proc.returncode == 0:
+            log_output = proc.stdout[-200:] if len(proc.stdout) > 200 else proc.stdout
+            await msg.edit_text(f"✅ **更新成功**\n\n`{log_output}`\n\n🚀 正在重启 Bot...", parse_mode='Markdown')
+            
+            # 给消息一点发送时间
+            time.sleep(1)
+            
+            # 重启当前脚本
+            # os.execl 会用新的进程替换当前进程，如果是在 PM2 下，PM2 会注意到 PID 变化或保持监控
+            # 如果是 PM2 管理，其实 os.execl 也是有效的，或者可以让进程退出让 PM2 重启
+            # 这里使用 os.execl 比较通用
+            os.execl(sys.executable, sys.executable, *sys.argv)
+        else:
+            await msg.edit_text(f"❌ **更新失败**\n\n错误信息:\n`{proc.stderr}`", parse_mode='Markdown')
+            
+    except Exception as e:
+        await msg.edit_text(f"❌ **发生异常**\n\n`{str(e)}`", parse_mode='Markdown')
 
 async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -326,6 +355,7 @@ def main():
     app.add_handler(CommandHandler("exec", exec_shell))
     app.add_handler(CommandHandler("ls", list_files_command))
     app.add_handler(CommandHandler("get", download_file))
+    app.add_handler(CommandHandler("update", update_bot_command))
     
     # 处理文件上传
     app.add_handler(MessageHandler(filters.Document.ALL, receive_file))
