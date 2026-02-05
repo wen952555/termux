@@ -8,19 +8,19 @@ interface BotConfigFormProps {
 }
 
 const FEATURE_PRESETS = [
-  { id: 'system_monitor', label: 'System Monitor (CPU/RAM/Disk)', icon: <Cpu size={16} /> },
-  { id: 'termux_battery', label: 'Battery Status (Termux API)', icon: <Battery size={16} /> },
-  { id: 'remote_exec', label: 'Remote Shell Execution', icon: <Terminal size={16} /> },
-  { id: 'photo_capture', label: 'Photo Capture (Termux API)', icon: <Camera size={16} /> },
-  { id: 'service_manager', label: 'Service Manager (Apache/SSH status)', icon: <Command size={16} /> },
+  { id: 'system_monitor', label: '系统监控 (CPU/内存/磁盘)', icon: <Cpu size={16} /> },
+  { id: 'termux_battery', label: '电池状态 (Termux API)', icon: <Battery size={16} /> },
+  { id: 'remote_exec', label: '远程 Shell 执行', icon: <Terminal size={16} /> },
+  { id: 'photo_capture', label: '拍照 (Termux API)', icon: <Camera size={16} /> },
+  { id: 'service_manager', label: '服务管理 (Apache/SSH)', icon: <Command size={16} /> },
 ];
 
 const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating }) => {
   const [config, setConfig] = useState<BotConfig>({
-    botToken: '',
-    chatId: '',
-    features: ['system_monitor'],
-    customPrompt: ''
+    botToken: '8091415322:AAFuS0PJKnu8hi0WHwXoSqHuJTZJNRFzzS4',
+    chatId: '1878794912',
+    features: ['system_monitor', 'termux_battery'],
+    customPrompt: '请确保机器人所有的回复消息、日志输出以及状态报告都严格使用中文（简体）。'
   });
 
   const toggleFeature = (id: string) => {
@@ -49,7 +49,7 @@ const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating 
           {/* Credentials */}
           <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400">Bot Token</label>
+              <label className="text-sm font-medium text-gray-400">Bot Token (已预填)</label>
               <input
                 type="text"
                 value={config.botToken}
@@ -57,10 +57,10 @@ const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating 
                 placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
                 className="w-full bg-black border border-termux-border rounded-lg px-4 py-3 text-white focus:border-termux-accent focus:ring-1 focus:ring-termux-accent outline-none transition-colors font-mono text-sm"
               />
-              <p className="text-xs text-gray-600">From @BotFather on Telegram</p>
+              <p className="text-xs text-gray-600">来自 Telegram @BotFather</p>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400">Admin Chat ID</label>
+              <label className="text-sm font-medium text-gray-400">Admin Chat ID (已预填)</label>
               <input
                 type="text"
                 value={config.chatId}
@@ -68,13 +68,13 @@ const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating 
                 placeholder="123456789"
                 className="w-full bg-black border border-termux-border rounded-lg px-4 py-3 text-white focus:border-termux-accent focus:ring-1 focus:ring-termux-accent outline-none transition-colors font-mono text-sm"
               />
-              <p className="text-xs text-gray-600">Your User ID (get from @userinfobot)</p>
+              <p className="text-xs text-gray-600">你的用户 ID (来自 @userinfobot)</p>
             </div>
           </div>
 
           {/* Features */}
           <div className="space-y-3">
-            <label className="text-sm font-medium text-gray-400">Enable Modules</label>
+            <label className="text-sm font-medium text-gray-400">启用模块</label>
             <div className="grid md:grid-cols-2 gap-3">
               {FEATURE_PRESETS.map(feature => (
                 <div
@@ -97,11 +97,11 @@ const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating 
 
           {/* Custom Prompt */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-400">Custom Behaviors (Optional)</label>
+            <label className="text-sm font-medium text-gray-400">自定义行为 (可选)</label>
             <textarea
               value={config.customPrompt}
               onChange={(e) => setConfig({ ...config, customPrompt: e.target.value })}
-              placeholder="e.g., Check if my python script 'miner.py' is running and restart it if not. Send me a daily report at 9 AM."
+              placeholder="例如：检查我的 python 脚本 'miner.py' 是否在运行，如果没有则重启。每天上午 9 点发送报告。"
               rows={4}
               className="w-full bg-black border border-termux-border rounded-lg px-4 py-3 text-white focus:border-termux-accent focus:ring-1 focus:ring-termux-accent outline-none transition-colors font-mono text-sm resize-none"
             />
@@ -111,8 +111,8 @@ const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating 
           <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 flex gap-3">
             <ShieldAlert className="text-yellow-500 shrink-0" />
             <div className="text-xs text-yellow-200/80">
-              <strong className="block text-yellow-500 mb-1">Security Warning</strong>
-              Enabling "Remote Shell Execution" gives the bot full control over your Termux user. Ensure you keep your Bot Token and Chat ID secret. The generated code includes an ID check to prevent unauthorized access.
+              <strong className="block text-yellow-500 mb-1">安全警告</strong>
+              启用“远程 Shell 执行”将赋予机器人对 Termux 用户的完全控制权。请确保保管好您的 Token 和 Chat ID。生成的代码包含 ID 检查以防止未经授权的访问。
             </div>
           </div>
 
@@ -125,7 +125,7 @@ const BotConfigForm: React.FC<BotConfigFormProps> = ({ onGenerate, isGenerating 
                 : 'bg-termux-accent text-black hover:bg-green-400 hover:shadow-[0_0_20px_rgba(0,255,0,0.3)]'
             }`}
           >
-            {isGenerating ? 'Compiling Logic...' : 'Generate Bot Script'}
+            {isGenerating ? '正在编译逻辑...' : '生成机器人脚本'}
           </button>
         </form>
       </div>
