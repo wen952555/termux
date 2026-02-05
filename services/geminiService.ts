@@ -8,15 +8,13 @@ Your task is to generate robust, error-handling Python scripts for Telegram bots
 Context: The user has Termux installed, with Ubuntu (PRoot) installed inside it, and Termux:API.
 The script might run in Native Termux OR inside the Ubuntu PRoot.
 
-The script must:
+Best Practices:
 1. Use 'python-telegram-bot' (v20+ async).
-2. Use 'subprocess' for system commands.
-3. Be strictly typed and commented.
-4. Include '/start' and '/help'.
-5. Check 'effective_user.id' against ADMIN_ID.
-6. Detect if running in Termux vs Ubuntu if possible, or try both commands (e.g., standard 'free -h' vs android specific).
-7. For Termux:API calls (battery, camera), use full paths if necessary (e.g., /data/data/com.termux/files/usr/bin/termux-battery-status) or fallback gracefully if not accessible from Ubuntu.
-8. IMPORTANCE: All user-facing messages, status reports, logs, and error messages MUST be in CHINESE (Simplified).
+2. For large bots, prefer modular structure (splitting logic into files), but for this specific single-file generation request, keep it in one file unless the user asks for structure.
+3. Check 'effective_user.id' against ADMIN_ID.
+4. Detect if running in Termux vs Ubuntu if possible.
+5. For Termux:API calls (battery, camera), use full paths if necessary or fallback.
+6. IMPORTANCE: All user-facing messages, status reports, logs, and error messages MUST be in CHINESE (Simplified).
 
 When asked to generate the script, return a JSON object containing:
 - 'code': The complete, runnable Python source code.
@@ -42,8 +40,7 @@ export const generateBotScript = async (config: BotConfig): Promise<{ code: stri
     Instructions for logic:
     - If "Battery" or "Camera" is requested: Try to use 'termux-battery-status'/'termux-camera-photo'. Warn in comments that these might require running in Native Termux or configuring termux-exec in Ubuntu.
     - If "Audio" or "Video" recording is requested: Always set the duration flag to 30 seconds (e.g., -l 30) unless specified otherwise.
-    - If "System Monitor" is requested: Use 'psutil' as it works well in both Ubuntu and Termux. Output format should be easy to read on mobile.
-    - If "Service Manager": Support checking systemctl (if using proot-distro with systemd shim) or standard service commands, but prefer simple process checks for Termux compatibility.
+    - If "System Monitor" is requested: Use 'psutil'. If Battery info is also requested, combine it into the System Monitor message instead of a separate command.
     - LANGUAGE REQUIREMENT: The entire Python script interaction (messages sent to Telegram) MUST be in CHINESE.
     
     Structure the code with async/await.
