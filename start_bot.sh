@@ -12,6 +12,17 @@ PM2_NAME="termux-bot"
 
 echo -e "${GREEN}=== Termux Telegram Bot 管理面板 ===${NC}"
 
+# 函数: 检查并安装 Termux API (Native Termux)
+check_termux_api() {
+    # 只有在存在 pkg 命令时（原生 Termux）才尝试安装
+    if command -v pkg &> /dev/null; then
+        if ! command -v termux-battery-status &> /dev/null; then
+            echo -e "${YELLOW}未检测到 termux-api 包，正在安装...${NC}"
+            pkg update && pkg install termux-api -y
+        fi
+    fi
+}
+
 # 函数: 检查并安装 Python
 check_python() {
     if ! command -v python &> /dev/null; then
@@ -54,6 +65,7 @@ check_pm2() {
 
 # 函数: 使用 PM2 启动
 start_pm2() {
+    check_termux_api
     check_python
     check_pm2
     
@@ -121,6 +133,7 @@ case $choice in
         stop_pm2
         ;;
     4)
+        check_termux_api
         check_python
         echo -e "${GREEN}正在前台启动 Bot (按 Ctrl+C 停止)...${NC}"
         python $BOT_FILE

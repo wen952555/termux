@@ -11,6 +11,14 @@ cd ~/termux && git fetch --all && git reset --hard origin/main && git pull && ch
 ./start_bot.sh
 ```
 
+## ⚠️ 重要说明：Termux API
+
+如果要使用 **电池信息** 或 **拍照** 功能，必须满足以下条件：
+
+1.  **安装 APP**: 手机上必须安装 [Termux:API](https://f-droid.org/packages/com.termux.api/) 安卓应用。
+2.  **安装包**: Termux 中必须安装 `termux-api` 包 (脚本会自动尝试安装)。
+3.  **授权**: 首次使用时，需在手机上允许 Termux 获取相机/位置/文件权限。
+
 ## 功能列表
 
 1.  **系统监控**: CPU、内存、磁盘、网络、进程 (Top 5)。
@@ -34,6 +42,7 @@ cd ~/termux && git fetch --all && git reset --hard origin/main && git pull && ch
 
 如果自动安装失败：
 ```bash
+# Termux 原生环境
 pkg install python nodejs termux-api -y
 pip install python-telegram-bot psutil
 npm install -g pm2
