@@ -7,6 +7,7 @@ import psutil
 import json
 import time
 import socket
+import shutil
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
@@ -54,6 +55,15 @@ def get_size(bytes, suffix="B"):
             return f"{bytes:.1f}{unit}{suffix}"
         bytes /= factor
 
+def check_api_availability():
+    """检测 Termux API 是否可用"""
+    # 检查命令是否存在
+    cmd_name = "termux-battery-status"
+    termux_path = "/data/data/com.termux/files/usr/bin/" + cmd_name
+    
+    is_available = shutil.which(cmd_name) is not None or os.path.exists(termux_path)
+    return is_available
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not check_admin(user_id):
@@ -62,11 +72,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     distro = get_distro_name()
     env_type = "PRoot/Chroot" if "Android" not in platform.uname().release and os.path.exists("/data/data/com.termux") else "Native Termux"
+    
+    # API 状态检测
+    api_status = "✅ 已就绪" if check_api_availability() else "⚠️ 未检测到 (部分功能不可用)"
+    if env_type == "PRoot/Chroot" and "未检测到" in api_status:
+        api_status += "\n(Ubuntu 环境下请确保已安装 termux-exec 或使用绝对路径)"
 
     await update.message.reply_text(
         f"🤖 **Termux 全能管家**\n"
-        f"环境: `{distro}` ({env_type})\n"
-        f"当前路径: `{os.getcwd()}`\n"
+        f"🐧 环境: `{distro}` ({env_type})\n"
+        f"📱 API 状态: {api_status}\n"
+        f"📂 当前路径: `{os.getcwd()}`\n\n"
         "请选择功能:",
         reply_markup=ReplyKeyboardMarkup(MENU_KEYBOARD, resize_keyboard=True),
         parse_mode='Markdown'
