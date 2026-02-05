@@ -10,16 +10,48 @@ NC='\033[0m'
 BOT_FILE="bot.py"
 PM2_NAME="termux-bot"
 TUNNEL_NAME="cloudflared"
+TERMUX_BIN_PATH="/data/data/com.termux/files/usr/bin"
 
 # --- 依赖检查函数 ---
 
 check_termux_api() {
-    # 仅在原生 Termux 环境下检查
-    if command -v pkg &> /dev/null && [ -d "/data/data/com.termux" ]; then
-        if ! command -v termux-battery-status &> /dev/null; then
-            echo -e "${YELLOW}>> 正在安装 termux-api...${NC}"
-            pkg update -y > /dev/null 2>&1 && pkg install termux-api -y > /dev/null 2>&1
+    echo -e "${BLUE}>> 检查 Termux API 组件...${NC}"
+    
+    # 检查核心二进制文件是否存在 (绝对路径检查，适用于原生和 Ubuntu 环境)
+    if [ ! -f "$TERMUX_BIN_PATH/termux-camera-record" ]; then
+        echo -e "${YELLOW}⚠️  警告: 未找到 termux-api 命令行工具。${NC}"
+        echo -e "${YELLOW}   这会导致拍照、录像功能不可用。${NC}"
+        
+        # 尝试自动安装
+        INSTALLED=0
+        
+        # 1. 尝试原生 pkg
+        if command -v pkg &> /dev/null; then
+            echo -e "   正在使用 pkg 安装..."
+            pkg update -y >/dev/null 2>&1 && pkg install termux-api -y >/dev/null 2>&1
+            if [ $? -eq 0 ]; then INSTALLED=1; fi
+        
+        # 2. 尝试调用宿主机 pkg (如果在 Ubuntu 容器中)
+        elif [ -x "$TERMUX_BIN_PATH/pkg" ]; then
+            echo -e "   检测到 Ubuntu/PRoot 环境，尝试调用宿主机 pkg..."
+            # 必须设置 LD_LIBRARY_PATH 以避免库冲突，或者直接调用
+            # 这里简单尝试直接调用
+            "$TERMUX_BIN_PATH/pkg" install termux-api -y >/dev/null 2>&1
+            if [ $? -eq 0 ]; then INSTALLED=1; fi
         fi
+
+        if [ $INSTALLED -eq 1 ]; then
+             echo -e "${GREEN}✅ termux-api 安装成功！${NC}"
+        else
+             echo -e "${RED}❌ 无法自动安装 termux-api。${NC}"
+             echo -e "${YELLOW}请手动修复: ${NC}"
+             echo -e "1. 打开 Termux 原生终端 (退出 Ubuntu)"
+             echo -e "2. 运行: ${GREEN}pkg install termux-api${NC}"
+             echo -e "3. 确保已安装 Google Play 上的 'Termux:API' 应用"
+             echo ""
+        fi
+    else
+        echo -e "${GREEN}✅ 检测到 Termux API 工具${NC}"
     fi
 }
 
