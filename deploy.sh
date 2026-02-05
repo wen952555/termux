@@ -45,9 +45,22 @@ fi
 
 # 4. 启动服务
 echo -e "${GREEN}=== 准备就绪 ===${NC}"
-echo -e "${YELLOW}[4/4] 正在启动服务...${NC}"
-echo "启动后请在浏览器访问显示的 Local 地址 (通常是 http://localhost:5173)"
-echo "按 Ctrl + C 停止服务"
+echo -e "${YELLOW}[4/4] 正在启动 Web 界面...${NC}"
+
+# 尝试获取局域网 IP
+IP_ADDR=$(ifconfig 2>/dev/null | grep -oE 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | awk '{print $2}' | sed 's/addr://')
+
 echo "-----------------------------------"
+echo -e "${GREEN}服务已启动！请在同一 Wi-Fi 下的设备访问:${NC}"
+if [ -n "$IP_ADDR" ]; then
+    for ip in $IP_ADDR; do
+        echo -e "👉 http://$ip:5173"
+    done
+else
+    echo -e "👉 http://<你的手机IP>:5173"
+fi
+echo -e "(本机访问使用: http://localhost:5173)"
+echo "-----------------------------------"
+echo "按 Ctrl + C 停止 Web 服务 (不会影响 Bot 运行)"
 
 npm run dev -- --host

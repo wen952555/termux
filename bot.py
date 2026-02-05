@@ -8,6 +8,7 @@ import json
 import time
 import socket
 import shutil
+import glob
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
@@ -15,6 +16,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 # --- 配置区域 ---
 BOT_TOKEN = "8091415322:AAFuS0PJKnu8hi0WHwXoSqHuJTZJNRFzzS4"
 ADMIN_ID = 1878794912
+MEDIA_DIR = "captured_media"  # 媒体文件保存目录
 # ----------------
 
 # 配置日志
@@ -24,13 +26,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 键盘菜单布局
+# 键盘菜单布局 (重组后)
 MENU_KEYBOARD = [
     [KeyboardButton("📊 系统状态"), KeyboardButton("📈 进程列表")],
-    [KeyboardButton("📂 文件管理"), KeyboardButton("🛠 服务探测")],
-    [KeyboardButton("🔋 电池信息"), KeyboardButton("📸 拍摄照片")],
-    [KeyboardButton("🔄 检查更新"), KeyboardButton("🐚 终端命令")]
+    [KeyboardButton("📸 拍摄照片"), KeyboardButton("📹 录制视频")],
+    [KeyboardButton("🗑 清理媒体"), KeyboardButton("🛠 服务探测")],
+    [KeyboardButton("🔋 电池信息"), KeyboardButton("🔄 检查更新")]
 ]
+
+# 确保媒体目录存在
+if not os.path.exists(MEDIA_DIR):
+    os.makedirs(MEDIA_DIR)
 
 def check_admin(user_id):
     return str(user_id) == str(ADMIN_ID)
@@ -57,10 +63,8 @@ def get_size(bytes, suffix="B"):
 
 def check_api_availability():
     """检测 Termux API 是否可用"""
-    # 检查命令是否存在
     cmd_name = "termux-battery-status"
     termux_path = "/data/data/com.termux/files/usr/bin/" + cmd_name
-    
     is_available = shutil.which(cmd_name) is not None or os.path.exists(termux_path)
     return is_available
 
@@ -73,17 +77,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     distro = get_distro_name()
     env_type = "PRoot/Chroot" if "Android" not in platform.uname().release and os.path.exists("/data/data/com.termux") else "Native Termux"
     
-    # API 状态检测
-    api_status = "✅ 已就绪" if check_api_availability() else "⚠️ 未检测到 (部分功能不可用)"
-    if env_type == "PRoot/Chroot" and "未检测到" in api_status:
-        api_status += "\n(Ubuntu 环境下请确保已安装 termux-exec 或使用绝对路径)"
+    api_status = "✅ 已就绪" if check_api_availability() else "⚠️ 未检测到 (媒体功能可能不可用)"
 
     await update.message.reply_text(
-        f"🤖 **Termux 全能管家**\n"
+        f"🤖 **Termux 监控卫士**\n"
         f"🐧 环境: `{distro}` ({env_type})\n"
         f"📱 API 状态: {api_status}\n"
-        f"📂 当前路径: `{os.getcwd()}`\n\n"
-        "请选择功能:",
+        f"💾 媒体目录: `{MEDIA_DIR}/`\n\n"
+        "请选择操作:",
         reply_markup=ReplyKeyboardMarkup(MENU_KEYBOARD, resize_keyboard=True),
         parse_mode='Markdown'
     )
@@ -94,59 +95,109 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
     
+    # 系统类
     if text == "📊 系统状态":
         await system_status(update, context)
     elif text == "📈 进程列表":
         await top_processes(update, context)
-    elif text == "📂 文件管理":
-        # 默认列出当前目录
-        await list_files(update, context, ".")
     elif text == "🛠 服务探测":
         await check_services(update, context)
     elif text == "🔋 电池信息":
         await get_battery(update, context)
+        
+    # 媒体类
     elif text == "📸 拍摄照片":
-        await take_photo(update, context)
-    elif text == "🐚 终端命令":
-        await update.message.reply_text(
-            "💻 **执行命令模式**\n\n"
-            "输入: `/exec <命令>`\n"
-            "例如: `/exec df -h`",
-            parse_mode='Markdown'
-        )
+        await capture_media(update, context, "photo")
+    elif text == "📹 录制视频":
+        await capture_media(update, context, "video")
+    elif text == "🗑 清理媒体":
+        await clean_media_files(update, context)
+        
+    # 管理类
     elif text == "🔄 检查更新":
         await update_bot_command(update, context)
     elif text == "❓ 帮助":
         await start(update, context)
 
-async def update_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- 核心功能函数 ---
+
+async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type="photo"):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    chat_id = update.effective_chat.id
+    
+    if media_type == "photo":
+        filename = f"{MEDIA_DIR}/photo_{timestamp}.jpg"
+        # 尝试两个路径，优先使用 path 变量中的，失败则尝试绝对路径
+        cmd = f"termux-camera-photo -c 0 {filename}"
+        alt_cmd = f"/data/data/com.termux/files/usr/bin/termux-camera-photo -c 0 {filename}"
+        msg_text = "📸 正在拍摄..."
+    else:
+        filename = f"{MEDIA_DIR}/video_{timestamp}.mp4"
+        duration = 5 # 视频时长秒
+        cmd = f"termux-camera-record -c 0 -l {duration} {filename}"
+        alt_cmd = f"/data/data/com.termux/files/usr/bin/termux-camera-record -c 0 -l {duration} {filename}"
+        msg_text = f"📹 正在录制 ({duration}s)..."
+
+    status_msg = await update.message.reply_text(msg_text)
+    
+    # 执行命令
+    try:
+        # 使用 timeout 防止卡死，视频录制需要稍微多一点时间
+        timeout_val = 15 if media_type == "video" else 10
+        subprocess.run(f"{cmd} || {alt_cmd}", shell=True, timeout=timeout_val, capture_output=True)
+    except subprocess.TimeoutExpired:
+        pass # 有时候录制会超时但文件已生成
+    except Exception as e:
+        await status_msg.edit_text(f"❌ 命令执行出错: {e}")
+        return
+
+    # 检查文件并发送
+    if os.path.exists(filename) and os.path.getsize(filename) > 0:
+        try:
+            await status_msg.edit_text(f"📤 正在上传...")
+            with open(filename, 'rb') as f:
+                if media_type == "photo":
+                    await context.bot.send_photo(chat_id, photo=f, caption=f"📅 {timestamp}")
+                else:
+                    await context.bot.send_video(chat_id, video=f, caption=f"📅 {timestamp}")
+            await status_msg.delete()
+        except Exception as e:
+            await status_msg.edit_text(f"❌ 发送失败: {e}")
+    else:
+        await status_msg.edit_text(f"❌ 获取失败 (请检查 Termux:API 权限)\n未能生成文件: {filename}")
+
+async def clean_media_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
     
-    msg = await update.message.reply_text("🔄 正在从 GitHub 强制拉取更新...", parse_mode='Markdown')
+    files = glob.glob(f"{MEDIA_DIR}/*")
+    count = len(files)
     
+    if count == 0:
+        await update.message.reply_text("🗑 目录为空，无需清理。")
+        return
+
     try:
-        # 执行 git 命令：强制重置并拉取
-        # 注意：这会丢弃本地对代码的直接修改
+        for f in files:
+            os.remove(f)
+        await update.message.reply_text(f"✅ 已删除 {count} 个媒体文件。")
+    except Exception as e:
+        await update.message.reply_text(f"❌ 清理部分失败: {e}")
+
+async def update_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔄 正在从 GitHub 强制拉取更新...", parse_mode='Markdown')
+    try:
         cmd = "git fetch --all && git reset --hard origin/main && git pull && chmod +x start_bot.sh"
         proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
         
         if proc.returncode == 0:
             log_output = proc.stdout[-200:] if len(proc.stdout) > 200 else proc.stdout
             await msg.edit_text(f"✅ **更新成功**\n\n`{log_output}`\n\n🚀 正在重启 Bot...", parse_mode='Markdown')
-            
-            # 给消息一点发送时间
             time.sleep(1)
-            
-            # 重启当前脚本
-            # os.execl 会用新的进程替换当前进程，如果是在 PM2 下，PM2 会注意到 PID 变化或保持监控
-            # 如果是 PM2 管理，其实 os.execl 也是有效的，或者可以让进程退出让 PM2 重启
-            # 这里使用 os.execl 比较通用
             os.execl(sys.executable, sys.executable, *sys.argv)
         else:
-            await msg.edit_text(f"❌ **更新失败**\n\n错误信息:\n`{proc.stderr}`", parse_mode='Markdown')
-            
+            await msg.edit_text(f"❌ **更新失败**\n\n`{proc.stderr}`", parse_mode='Markdown')
     except Exception as e:
-        await msg.edit_text(f"❌ **发生异常**\n\n`{str(e)}`", parse_mode='Markdown')
+        await msg.edit_text(f"❌ **异常**: `{str(e)}`", parse_mode='Markdown')
 
 async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -154,7 +205,6 @@ async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vm = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
         net = psutil.net_io_counters()
-        
         boot_time = psutil.boot_time()
         uptime_s = time.time() - boot_time
         uptime_str = f"{int(uptime_s // 3600)}h {int((uptime_s % 3600) // 60)}m"
@@ -172,9 +222,7 @@ async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 错误: {str(e)}")
 
 async def top_processes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
     await update.message.reply_text("🔍 正在分析进程...")
-    
     try:
         processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent']):
@@ -183,103 +231,17 @@ async def top_processes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         
         top_cpu = sorted(processes, key=lambda p: p['cpu_percent'] or 0, reverse=True)[:5]
-        
-        msg = "📈 **Top 5 CPU 进程**:\n```\n"
-        msg += f"{'PID':<6} {'%CPU':<6} {'NAME'}\n"
+        msg = "📈 **Top 5 CPU 进程**:\n```\nPID    %CPU   NAME\n"
         for p in top_cpu:
             msg += f"{p['pid']:<6} {p['cpu_percent']:<6.1f} {p['name'][:15]}\n"
         msg += "```"
-        
         await update.message.reply_text(msg, parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ 获取进程失败: {e}")
-
-async def list_files_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    path = " ".join(context.args) if context.args else "."
-    await list_files(update, context, path)
-
-async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE, path="."):
-    try:
-        if not os.path.exists(path):
-            await update.message.reply_text("❌ 路径不存在")
-            return
-            
-        abs_path = os.path.abspath(path)
-        items = os.listdir(abs_path)
-        items.sort(key=lambda x: (not os.path.isdir(os.path.join(abs_path, x)), x.lower()))
-        
-        msg = f"📂 **目录**: `{abs_path}`\n\n"
-        
-        # 限制显示数量防止消息过长
-        count = 0
-        for item in items:
-            if count > 20: 
-                msg += "\n...(更多文件请指定子目录)"
-                break
-            full_item_path = os.path.join(abs_path, item)
-            is_dir = os.path.isdir(full_item_path)
-            icon = "📁" if is_dir else "📄"
-            size = "" if is_dir else f" ({get_size(os.path.getsize(full_item_path))})"
-            
-            # 对特殊字符进行简单转义
-            display_name = item.replace("_", "\\_").replace("*", "\\*")
-            msg += f"{icon} `{display_name}`{size}\n"
-            count += 1
-            
-        msg += "\n💾 **下载文件**: `/get <文件名>`\n"
-        msg += "📂 **进入目录**: `/ls <路径>`"
-        
-        await update.message.reply_text(msg, parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"❌ 无法列出目录: {e}")
-
-async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    
-    if not context.args:
-        await update.message.reply_text("用法: `/get <文件路径>`", parse_mode='Markdown')
-        return
-        
-    path = " ".join(context.args)
-    if os.path.exists(path) and os.path.isfile(path):
-        status_msg = await update.message.reply_text(f"📤 正在上传 `{path}`...", parse_mode='Markdown')
-        try:
-            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(path, 'rb'))
-            await status_msg.delete()
-        except Exception as e:
-            await status_msg.edit_text(f"❌ 发送失败: {e}")
-    else:
-        await update.message.reply_text("❌ 文件不存在或无法读取。")
-
-async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    
-    doc = update.message.document
-    file_name = doc.file_name
-    
-    # 创建下载目录
-    download_dir = "Downloads"
-    if not os.path.exists(download_dir):
-        os.makedirs(download_dir)
-        
-    save_path = os.path.join(download_dir, file_name)
-    
-    status_msg = await update.message.reply_text(f"⬇️ 正在下载 `{file_name}`...", parse_mode='Markdown')
-    
-    try:
-        new_file = await doc.get_file()
-        await new_file.download_to_drive(save_path)
-        await status_msg.edit_text(f"✅ 文件已保存至:\n`{os.path.abspath(save_path)}`", parse_mode='Markdown')
-    except Exception as e:
-        await status_msg.edit_text(f"❌ 下载失败: {e}")
+        await update.message.reply_text(f"❌ 失败: {e}")
 
 async def check_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    
-    ports = {22: "SSH", 80: "HTTP", 8080: "Web", 3306: "MySQL", 6379: "Redis"}
+    ports = {22: "SSH", 80: "HTTP", 8080: "Web", 3306: "MySQL", 6379: "Redis", 5173: "Vite Dev"}
     results = []
-    
     for port, name in ports.items():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.5)
@@ -287,8 +249,7 @@ async def check_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if res == 0: results.append(f"🟢 **{name}** ({port})")
         sock.close()
 
-    if not results: msg = "🛠 未检测到常用端口开放。"
-    else: msg = "🛠 **服务探测**:\n" + "\n".join(results)
+    msg = "🛠 **服务探测**:\n" + ("\n".join(results) if results else "未检测到常用端口。")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def get_battery(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -311,26 +272,9 @@ async def get_battery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("⚠️ 无法获取电池信息 (需 Termux:API)")
 
-async def take_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    photo_path = "cam_photo.jpg"
-    await update.message.reply_text("📸 正在拍照...")
-    
-    cmd = "termux-camera-photo -c 0 cam_photo.jpg"
-    alt_cmd = "/data/data/com.termux/files/usr/bin/termux-camera-photo -c 0 cam_photo.jpg"
-    
-    subprocess.run(f"{cmd} || {alt_cmd}", shell=True, timeout=10)
-    
-    if os.path.exists(photo_path):
-        await context.bot.send_photo(chat_id, photo=open(photo_path, 'rb'))
-        os.remove(photo_path)
-    else:
-        await update.message.reply_text("❌ 拍照失败。")
-
 async def exec_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("用法: `/exec ls`")
-
+    if not context.args: return await update.message.reply_text("用法: `/exec ls -la`")
     cmd = " ".join(context.args)
     await update.message.reply_text(f"💻 执行: `{cmd}`", parse_mode='Markdown')
     try:
@@ -340,26 +284,17 @@ async def exec_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌: {e}")
 
-async def restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    await update.message.reply_text("🔄 重启中...")
-    time.sleep(1)
-    os.execl(sys.executable, sys.executable, *sys.argv)
-
 def main():
     print(f"Bot 启动... Admin: {ADMIN_ID}")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # 命令处理器
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("exec", exec_shell))
-    app.add_handler(CommandHandler("ls", list_files_command))
-    app.add_handler(CommandHandler("get", download_file))
     app.add_handler(CommandHandler("update", update_bot_command))
     
-    # 处理文件上传
-    app.add_handler(MessageHandler(filters.Document.ALL, receive_file))
-    # 处理菜单按钮
+    # 消息处理器 (菜单按钮)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Polling...")
