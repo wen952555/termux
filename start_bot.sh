@@ -94,46 +94,42 @@ check_cloudflared() {
 
 # --- 操作函数 ---
 
-start_bot() {
-    echo -e "${GREEN}=== Termux Telegram Bot 启动程序 ===${NC}"
-    check_termux_api
-    check_python
-    check_pm2
-
-    if pm2 describe $PM2_NAME > /dev/null 2>&1; then
-        echo -e "${BLUE}Bot 已经在运行，正在重启...${NC}"
-        pm2 restart $PM2_NAME
-    else
-        echo -e "${GREEN}正在启动 Bot 守护进程...${NC}"
-        pm2 start $BOT_FILE --name $PM2_NAME --interpreter python
-        pm2 save
-    fi
-    echo -e "${GREEN}✅ Bot 已在后台运行！${NC}"
-    echo "使用 './start_bot.sh log' 查看日志"
-}
-
-start_tunnel() {
-    echo -e "${GREEN}=== Cloudflare Tunnel 配置 ===${NC}"
+# 启动 Tunnel 的核心逻辑
+# 参数 $1: Token (可选)
+# 参数 $2: 模式 (auto: 自动模式，不交互)
+run_tunnel_logic() {
+    INPUT_TOKEN="$1"
+    MODE="$2"
+    TOKEN_FILE=".tunnel_token"
+    
     check_cloudflared
     check_pm2
 
-    # 获取 Token
-    TOKEN="$1"
-    TOKEN_FILE=".tunnel_token"
-
-    if [ -z "$TOKEN" ]; then
-        if [ -f "$TOKEN_FILE" ]; then
-            TOKEN=$(cat "$TOKEN_FILE")
-            echo -e "${BLUE}已从缓存读取 Token。${NC}"
-        fi
+    # 1. 确定 Token
+    TOKEN=""
+    # 如果传入了 Token 且不是 "auto" (处理脚本参数错位情况)
+    if [ -n "$INPUT_TOKEN" ] && [ "$INPUT_TOKEN" != "auto" ]; then
+        TOKEN="$INPUT_TOKEN"
+        echo "$TOKEN" > "$TOKEN_FILE"
     fi
 
+    # 如果没传入，尝试读取文件
+    if [ -z "$TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+        TOKEN=$(cat "$TOKEN_FILE")
+    fi
+
+    # 如果还是没有，且不是自动模式，则询问
     if [ -z "$TOKEN" ]; then
+        if [ "$MODE" == "auto" ]; then
+            return 0 # 自动模式下如果没有 Token，直接跳过
+        fi
+        
+        echo -e "${GREEN}=== Cloudflare Tunnel 配置 ===${NC}"
         echo -e "${YELLOW}请输入您的 Cloudflare Tunnel Token:${NC}"
         echo "(在 Cloudflare Dashboard > Zero Trust > Access > Tunnels 中获取)"
-        read -r INPUT_TOKEN
-        if [ -n "$INPUT_TOKEN" ]; then
-            TOKEN="$INPUT_TOKEN"
+        read -r USER_TOKEN
+        if [ -n "$USER_TOKEN" ]; then
+            TOKEN="$USER_TOKEN"
             echo "$TOKEN" > "$TOKEN_FILE"
         else
             echo -e "${RED}错误: 未提供 Token，无法启动隧道。${NC}"
@@ -141,25 +137,52 @@ start_tunnel() {
         fi
     fi
 
-    echo -e "${GREEN}正在启动 Cloudflare Tunnel...${NC}"
-    
-    # 确定 cloudflared 命令路径
+    # 2. 启动 PM2 进程
     CMD="cloudflared"
     if [ -f "./cloudflared" ] && ! command -v cloudflared &> /dev/null; then
         CMD="./cloudflared"
     fi
 
-    # 清理旧进程
-    pm2 delete $TUNNEL_NAME >/dev/null 2>&1
+    # 检查是否已经在运行
+    if pm2 describe $TUNNEL_NAME > /dev/null 2>&1; then
+        # 获取当前运行的参数，检查是否需要更新 Token? 
+        # 简化起见，如果已运行，我们重启它以确保应用最新配置
+        pm2 restart $TUNNEL_NAME
+    else
+        pm2 start "$CMD" --name $TUNNEL_NAME -- tunnel run --token "$TOKEN"
+    fi
+    
+    if [ "$MODE" != "auto" ]; then
+        echo -e "${GREEN}✅ Cloudflare Tunnel 已启动!${NC}"
+        echo -e "请确保后台指向: ${YELLOW}http://localhost:5173${NC}"
+    fi
+}
 
-    # 启动新进程
-    # 注意：Web 服务默认运行在 localhost:5173
-    # Cloudflare 后台需要将 Public Hostname 指向 http://localhost:5173
-    pm2 start "$CMD" --name $TUNNEL_NAME -- tunnel run --token "$TOKEN"
+
+start_bot() {
+    echo -e "${GREEN}=== Termux Telegram Bot 启动程序 ===${NC}"
+    check_termux_api
+    check_python
+    check_pm2
+
+    # 1. 启动 Bot
+    if pm2 describe $PM2_NAME > /dev/null 2>&1; then
+        echo -e "${BLUE}Bot 已经在运行，正在重启...${NC}"
+        pm2 restart $PM2_NAME
+    else
+        echo -e "${GREEN}正在启动 Bot 守护进程...${NC}"
+        pm2 start $BOT_FILE --name $PM2_NAME --interpreter python
+    fi
+
+    # 2. 自动启动 Tunnel (如果已配置)
+    if [ -f ".tunnel_token" ]; then
+        echo -e "${BLUE}>> 检测到隧道配置，正在启动 Cloudflare Tunnel...${NC}"
+        run_tunnel_logic "" "auto"
+    fi
+
     pm2 save
-
-    echo -e "${GREEN}✅ 隧道已启动!${NC}"
-    echo -e "请确保您在 Cloudflare 后台将隧道指向: ${YELLOW}http://localhost:5173${NC}"
+    echo -e "${GREEN}✅ 所有服务已在后台运行！${NC}"
+    echo "使用 './start_bot.sh log' 查看日志"
 }
 
 stop_all() {
@@ -192,14 +215,15 @@ case "$ACTION" in
         start_bot
         ;;
     tunnel)
-        start_tunnel "$2"
+        # $2 是 Token
+        run_tunnel_logic "$2" "manual"
+        pm2 save
         ;;
     stop)
         stop_all
         ;;
     restart)
         start_bot
-        start_tunnel
         ;;
     log|logs)
         view_log
@@ -210,8 +234,8 @@ case "$ACTION" in
     help)
         echo "用法: ./start_bot.sh [命令]"
         echo "命令列表:"
-        echo "  start       启动/重启 Telegram Bot"
-        echo "  tunnel      启动/配置 Cloudflare 内网穿透"
+        echo "  start       启动/重启 Bot (及隧道)"
+        echo "  tunnel      配置并启动 Cloudflare 隧道"
         echo "  stop        停止所有服务"
         echo "  log         查看实时日志"
         echo "  update      强制更新代码"
