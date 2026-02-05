@@ -4,7 +4,9 @@ import subprocess
 import sys
 import platform
 import psutil
-from telegram import Update
+import json
+import time
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
 # --- 配置区域 ---
@@ -17,9 +19,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
+
+# 键盘菜单布局
+MENU_KEYBOARD = [
+    [KeyboardButton("📊 系统状态"), KeyboardButton("🔋 电池信息")],
+    [KeyboardButton("📸 拍摄照片"), KeyboardButton("🐚 终端命令")],
+    [KeyboardButton("🔄 重启机器人"), KeyboardButton("❓ 帮助")]
+]
 
 def check_admin(user_id):
-    return str(user_id) == str(ADMIN_ID)
+    is_admin = str(user_id) == str(ADMIN_ID)
+    if not is_admin:
+        logger.warning(f"非管理员尝试访问: {user_id}")
+    return is_admin
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -28,19 +41,41 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🤖 **Termux 控制终端已就绪**\n\n"
-        "可用命令:\n"
-        "📊 /status - 查看系统状态 (CPU/内存/磁盘)\n"
-        "🔋 /battery - 查看电池状态 (Termux API)\n"
-        "📸 /photo - 调用后置摄像头拍照\n"
-        "💻 /exec <命令> - 执行 Shell 命令\n"
-        "⚠️ 请谨慎执行系统命令。",
+        "🤖 **Termux 控制终端已就绪**\n"
+        "请使用下方菜单或输入命令操作。",
+        reply_markup=ReplyKeyboardMarkup(MENU_KEYBOARD, resize_keyboard=True),
         parse_mode='Markdown'
     )
 
-async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not check_admin(user_id): return
 
+    text = update.message.text
+    
+    if text == "📊 系统状态":
+        await system_status(update, context)
+    elif text == "🔋 电池信息":
+        await get_battery(update, context)
+    elif text == "📸 拍摄照片":
+        await take_photo(update, context)
+    elif text == "🐚 终端命令":
+        await update.message.reply_text(
+            "💻 **执行命令模式**\n\n"
+            "由于安全原因，请手动输入命令，格式如下：\n"
+            "`/exec ls -la`\n"
+            "`/exec pm2 list`",
+            parse_mode='Markdown'
+        )
+    elif text == "🔄 重启机器人":
+        await restart_bot(update, context)
+    elif text == "❓ 帮助":
+        await start(update, context)
+    else:
+        # 如果不是菜单命令，且不是以/开头（已由CommandHandler处理），则忽略或提示
+        pass
+
+async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # CPU
         cpu_percent = psutil.cpu_percent(interval=1)
@@ -59,27 +94,32 @@ async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disk_total = f"{disk.total / 1024 / 1024 / 1024:.2f} GB"
         disk_percent = disk.percent
 
+        # 网络
+        net = psutil.net_io_counters()
+        sent = f"{net.bytes_sent / 1024 / 1024:.1f} MB"
+        recv = f"{net.bytes_recv / 1024 / 1024:.1f} MB"
+
         # 运行时间
         boot_time = psutil.boot_time()
-        import time
         uptime_seconds = time.time() - boot_time
         uptime_hours = uptime_seconds // 3600
+        uptime_days = uptime_hours // 24
+        uptime_str = f"{int(uptime_days)}天 {int(uptime_hours % 24)}小时" if uptime_days > 0 else f"{int(uptime_hours)}小时"
 
         msg = (
             f"📊 **系统状态报告**\n\n"
-            f"**CPU**: {cpu_percent}% ({freq_info})\n"
-            f"**内存**: {ram_used} / {ram_total} ({ram_percent}%)\n"
-            f"**磁盘**: {disk_used} / {disk_total} ({disk_percent}%)\n"
-            f"**运行时间**: {int(uptime_hours)} 小时\n"
-            f"**系统**: {platform.system()} {platform.release()}"
+            f"**系统**: `{platform.system()} {platform.release()}`\n"
+            f"**在线**: {uptime_str}\n"
+            f"**CPU**: `{cpu_percent}%` ({freq_info})\n"
+            f"**内存**: `{ram_used} / {ram_total}` ({ram_percent}%)\n"
+            f"**磁盘**: `{disk_used} / {disk_total}` ({disk_percent}%)\n"
+            f"**网络**: ⬆️ `{sent}` | ⬇️ `{recv}`"
         )
         await update.message.reply_text(msg, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ 获取状态失败: {str(e)}")
 
 async def get_battery(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    
     # 尝试不同的 termux-battery-status 调用方式
     commands = [
         "termux-battery-status", 
@@ -97,21 +137,37 @@ async def get_battery(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
 
     if output:
-        await update.message.reply_text(f"🔋 **电池状态**:\n`{output}`", parse_mode='Markdown')
+        try:
+            # 尝试解析 JSON 使得显示更友好
+            data = json.loads(output)
+            percentage = data.get('percentage', '?')
+            status = data.get('status', 'Unknown')
+            health = data.get('health', 'Unknown')
+            temperature = data.get('temperature', 0)
+            plugged = data.get('plugged', 'No')
+            
+            msg = (
+                f"🔋 **电池详情**\n\n"
+                f"**电量**: `{percentage}%`\n"
+                f"**状态**: `{status}` ({plugged})\n"
+                f"**健康**: `{health}`\n"
+                f"**温度**: `{temperature}°C`"
+            )
+            await update.message.reply_text(msg, parse_mode='Markdown')
+        except json.JSONDecodeError:
+            # 如果不是JSON，直接显示原始内容
+            await update.message.reply_text(f"🔋 **电池状态**:\n`{output}`", parse_mode='Markdown')
     else:
         await update.message.reply_text(
             "⚠️ 无法读取电池信息。\n"
-            "如果你在 Ubuntu/PRoot 环境中运行，请确保 Termux 原生环境已安装 Termux:API，"
-            "并且你有权限访问该命令。"
+            "请确认 Termux:API 已安装，或在原生 Termux 环境下运行。"
         )
 
 async def take_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    
     chat_id = update.effective_chat.id
     photo_path = "cam_photo.jpg"
     
-    await update.message.reply_text("📸 正在调用摄像头...")
+    status_msg = await update.message.reply_text("📸 正在调用摄像头...")
     
     # 尝试调用 termux-camera-photo
     cmd = "termux-camera-photo -c 0 cam_photo.jpg"
@@ -129,14 +185,15 @@ async def take_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if res.returncode == 0 and os.path.exists(photo_path):
                 success = True
     except Exception as e:
-        await update.message.reply_text(f"❌ 调用出错: {e}")
+        await status_msg.edit_text(f"❌ 调用出错: {e}")
         return
 
     if success:
         await context.bot.send_photo(chat_id=chat_id, photo=open(photo_path, 'rb'))
+        await status_msg.delete()
         os.remove(photo_path)
     else:
-        await update.message.reply_text("❌ 拍照失败。请确保已安装 Termux:API 并授予了相机权限。")
+        await status_msg.edit_text("❌ 拍照失败。请确保已安装 Termux:API 并授予了相机权限。")
 
 async def exec_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
@@ -149,7 +206,7 @@ async def exec_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💻 执行: `{command}`", parse_mode='Markdown')
 
     try:
-        # 限制输出长度，防止消息过长发送失败
+        # 限制输出长度
         result = subprocess.run(
             command, 
             shell=True, 
@@ -179,16 +236,33 @@ async def exec_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ 执行错误: {str(e)}")
 
+async def restart_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_admin(update.effective_user.id): return
+    await update.message.reply_text("🔄 正在重启机器人...\n(如果由 PM2 管理，进程将自动拉起)")
+    
+    # 给予一点时间发送消息
+    time.sleep(1)
+    
+    # 方法1: 如果是 PM2 管理，直接退出，PM2 会重启它
+    # 方法2: 尝试使用 os.exec 重新执行当前脚本
+    
+    # 这里我们使用 os.execv 重新加载，这样即使没有 PM2 也能重启
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
 def main():
     print(f"Bot 正在启动... (Admin ID: {ADMIN_ID})")
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # 命令处理器
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", start))
     application.add_handler(CommandHandler("status", system_status))
     application.add_handler(CommandHandler("battery", get_battery))
     application.add_handler(CommandHandler("photo", take_photo))
     application.add_handler(CommandHandler("exec", exec_shell))
+
+    # 文本消息处理器 (用于处理菜单按钮点击)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Bot 已开始轮询...")
     application.run_polling()

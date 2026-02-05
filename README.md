@@ -1,42 +1,57 @@
 # Termux Telegram Bot
 
-这是一个专为 Termux 设计的 Telegram 管理机器人。
+这是一个专为 Termux 设计的 Telegram 管理机器人，支持 Ubuntu/Proot 环境。
+
+## 功能列表
+
+*   **键盘菜单**: 方便的底部菜单，无需记忆命令。
+*   **系统监控**: CPU、内存、磁盘、网络流量、运行时间。
+*   **电池监控**: 详细的电量、温度、健康状态 (需 Termux:API)。
+*   **远程拍照**: 调用后置摄像头拍照 (需 Termux:API)。
+*   **命令执行**: 只有管理员可用的 Shell 命令执行器 (`/exec`)。
+*   **进程守护**: 集成 PM2，支持掉线自动重启、开机自启（需配置 Termux-services）。
 
 ## 快速开始
 
-### 1. 运行 Bot (推荐)
+### 1. 启动管理面板
 
-如果你只是想运行机器人，不需要使用 Web 生成器，只需在 Termux/Ubuntu 中运行以下命令：
+在 Termux 或 Ubuntu 终端中运行：
 
 ```bash
 chmod +x start_bot.sh
 ./start_bot.sh
 ```
 
-这个脚本会自动：
-1. 安装 Python 环境。
-2. 安装必要的库 (`python-telegram-bot`, `psutil`)。
-3. 启动 `bot.py`。
+### 2. 选择启动方式
 
-### 2. Bot 功能
+脚本会显示一个菜单：
+*   选择 **1** 使用 **PM2** 启动（推荐）。它会自动安装 Node.js 和 PM2，并将机器人作为后台服务运行。
+*   选择 **4** 进行前台调试。
 
-你的机器人 (`bot.py`) 已经配置了以下功能：
+### 3. Telegram 使用
 
-- **Token**: `8091415322:...`
-- **Admin**: `1878794912`
-- **命令**:
-    - `/status`: 查看 CPU、内存、磁盘使用情况。
-    - `/battery`: 查看 Termux 电池状态。
-    - `/photo`: 调用摄像头拍照。
-    - `/exec <命令>`: 执行 Shell 命令 (仅限管理员)。
+给机器人发送 `/start`。
+如果你的 ID 是管理员 ID，你会看到一个包含以下按钮的键盘：
 
-## Web 生成器 (可选)
+*   📊 **系统状态**
+*   🔋 **电池信息**
+*   📸 **拍摄照片**
+*   🐚 **终端命令** (提示如何使用 /exec)
+*   🔄 **重启机器人**
 
-如果你想通过 AI 生成新的、功能不同的脚本，可以运行 Web 界面：
+## 常用 PM2 命令
 
-```bash
-chmod +x deploy.sh
-./deploy.sh
+如果你选择使用 PM2 管理，也可以手动使用以下命令：
+
+*   `pm2 list` - 查看运行状态
+*   `pm2 log termux-bot` - 查看机器人日志
+*   `pm2 stop termux-bot` - 停止机器人
+*   `pm2 restart termux-bot` - 重启机器人
+
+## 配置修改
+
+编辑 `bot.py` 文件顶部：
+```python
+BOT_TOKEN = "你的Token"
+ADMIN_ID = 你的ID
 ```
-
-然后访问 `http://localhost:5173`。
