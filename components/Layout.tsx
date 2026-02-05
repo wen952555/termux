@@ -1,6 +1,6 @@
 import React from 'react';
 import { TerminalIcon } from './TerminalIcon';
-import { Bot, BookOpen, Settings, Github } from 'lucide-react';
+import { Bot, BookOpen, Activity } from 'lucide-react';
 import { ViewState } from '../types';
 
 interface LayoutProps {
@@ -24,6 +24,18 @@ const Layout: React.FC<LayoutProps> = ({ children, view, setView }) => {
 
         <nav className="p-4 space-y-2">
           <button
+            onClick={() => setView(ViewState.MONITOR)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+              view === ViewState.MONITOR
+                ? 'bg-termux-dim text-termux-accent border border-termux-dim'
+                : 'hover:bg-gray-900 hover:text-white'
+            }`}
+          >
+            <Activity size={20} />
+            <span>Dashboard</span>
+          </button>
+
+          <button
             onClick={() => setView(ViewState.CONFIG)}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
               view === ViewState.CONFIG || view === ViewState.GENERATING || view === ViewState.RESULT
@@ -32,7 +44,7 @@ const Layout: React.FC<LayoutProps> = ({ children, view, setView }) => {
             }`}
           >
             <Bot size={20} />
-            <span>Generator</span>
+            <span>Bot Generator</span>
           </button>
 
           <button
@@ -48,7 +60,7 @@ const Layout: React.FC<LayoutProps> = ({ children, view, setView }) => {
           </button>
         </nav>
 
-        <div className="md:absolute md:bottom-0 md:left-0 md:w-64 p-4 border-t border-termux-border">
+        <div className="md:absolute md:bottom-0 md:left-0 md:w-64 p-4 border-t border-termux-border hidden md:block">
           <div className="text-xs text-gray-600 text-center">
             Powered by Gemini 3 Flash
           </div>
@@ -57,7 +69,7 @@ const Layout: React.FC<LayoutProps> = ({ children, view, setView }) => {
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto h-[calc(100vh-64px)] md:h-screen p-4 md:p-8">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-6xl mx-auto">
           {children}
         </div>
       </main>

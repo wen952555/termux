@@ -2,13 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
+import { exec } from 'child_process'
 import { fileURLToPath } from 'url'
-import mime from 'mime-types' // 需要确保运行环境中能处理mime，或者我们手动处理
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// 简单的 mime 类型映射，避免引入 extra dependency 导致 Termux 安装困难
 const getMimeType = (filename) => {
   const ext = path.extname(filename).toLowerCase();
   const map = {
@@ -17,7 +17,7 @@ const getMimeType = (filename) => {
     '.png': 'image/png',
     '.gif': 'image/gif',
     '.mp4': 'video/mp4',
-    '.m4a': 'audio/mp4', // m4a 通常是 audio/mp4 或 audio/x-m4a
+    '.m4a': 'audio/mp4',
     '.mp3': 'audio/mpeg',
     '.wav': 'audio/wav',
     '.json': 'application/json'
@@ -25,7 +25,6 @@ const getMimeType = (filename) => {
   return map[ext] || 'application/octet-stream';
 };
 
-// 自定义中间件：提供文件列表、删除功能以及静态文件服务
 const mediaServerPlugin = () => ({
   name: 'media-server-plugin',
   configureServer(server) {
@@ -35,7 +34,60 @@ const mediaServerPlugin = () => ({
         fs.mkdirSync(mediaDir);
       }
 
-      // 1. 获取文件列表 API
+      // 1. System Stats API
+      if (req.url === '/api/system' && req.method === 'GET') {
+        const cpus = os.cpus();
+        // Calculate CPU usage roughly based on load avg for simplicity in this context, 
+        // or just use loadavg[0] normalized by core count.
+        const loadAvg = os.loadavg();
+        const cpuUsage = Math.min(100, (loadAvg[0] / cpus.length) * 100);
+        
+        const totalMem = os.totalmem();
+        const freeMem = os.freemem();
+        const usedMem = totalMem - freeMem;
+
+        // Get Disk Usage asynchronously
+        exec('df -k /', (err, stdout) => {
+          let diskInfo = { total: 0, free: 0, used: 0, percent: 0 };
+          if (!err && stdout) {
+            const lines = stdout.trim().split('\n');
+            if (lines.length > 1) {
+              const parts = lines[1].replace(/\s+/g, ' ').split(' ');
+              // df -k output: Filesystem 1K-blocks Used Available Use% Mounted on
+              // Index might vary slightly depending on OS implementation, usually:
+              // total=1, used=2, available=3, percent=4
+              if (parts.length >= 5) {
+                diskInfo = {
+                  total: parseInt(parts[1]) * 1024,
+                  used: parseInt(parts[2]) * 1024,
+                  free: parseInt(parts[3]) * 1024,
+                  percent: parseInt(parts[4].replace('%', ''))
+                };
+              }
+            }
+          }
+
+          const stats = {
+            cpu: parseFloat(cpuUsage.toFixed(1)),
+            memory: {
+              total: totalMem,
+              free: freeMem,
+              used: usedMem,
+              percent: parseFloat(((usedMem / totalMem) * 100).toFixed(1))
+            },
+            disk: diskInfo,
+            uptime: os.uptime(),
+            platform: os.platform() + ' ' + os.release()
+          };
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(stats));
+        });
+        return;
+      }
+
+      // 2. Get Files List API
       if (req.url === '/api/files' && req.method === 'GET') {
         try {
           const fileNames = fs.readdirSync(mediaDir);
@@ -45,11 +97,9 @@ const mediaServerPlugin = () => ({
               try {
                 const filePath = path.join(mediaDir, file);
                 const stats = fs.statSync(filePath);
-                
                 let type = 'image';
                 if (file.endsWith('.mp4')) type = 'video';
                 else if (/\.(m4a|mp3|wav)$/i.test(file)) type = 'audio';
-
                 return {
                   name: file,
                   url: `/captured_media/${file}`,
@@ -72,7 +122,7 @@ const mediaServerPlugin = () => ({
         return;
       }
 
-      // 2. 删除文件 API
+      // 3. Delete File API
       if (req.url === '/api/delete' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => body += chunk);
@@ -86,7 +136,6 @@ const mediaServerPlugin = () => ({
             }
             const safeFilename = path.basename(filename);
             const filePath = path.join(mediaDir, safeFilename);
-            
             if (fs.existsSync(filePath)) {
               fs.unlinkSync(filePath);
               res.end(JSON.stringify({ success: true }));
@@ -102,18 +151,14 @@ const mediaServerPlugin = () => ({
         return;
       }
 
-      // 3. 静态文件服务拦截 (针对 /captured_media/ 路径)
-      // 这确保即使在某些环境下 Vite 不会自动 serve 根目录文件，我们也能强制 serve
+      // 4. Static File Serving (captured_media)
       if (req.url?.startsWith('/captured_media/')) {
-        const fileName = path.basename(req.url); // 安全起见只取文件名
-        // 解码 URL (处理空格等)
+        const fileName = path.basename(req.url);
         const safeFileName = decodeURIComponent(fileName);
         const filePath = path.join(mediaDir, safeFileName);
-
         if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
            const mimeType = getMimeType(safeFileName);
            res.setHeader('Content-Type', mimeType);
-           // 创建读取流并 piping 到 response
            const stream = fs.createReadStream(filePath);
            stream.pipe(res);
            return; 
