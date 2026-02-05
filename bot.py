@@ -9,7 +9,7 @@ from bot_modules.media import capture_media, cleanup_media
 from bot_modules.tools import show_torch_menu, handle_torch_callback, check_ip, exec_command
 
 # --- MENU LAYOUT ---
-# Updated Layout based on user request
+# 布局调整：移除文件管理，添加清理和强制更新
 MENU_KEYBOARD = [
     [KeyboardButton("📊 系统状态"), KeyboardButton("🗑 清理媒体")],
     [KeyboardButton("📸 拍摄照片"), KeyboardButton("🔦 手电筒")],
@@ -42,7 +42,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🌐 公网 IP": await check_ip(update, context)
     elif text == "💻 终端命令":
         await update.message.reply_text("使用 `/exec <命令>` 执行任意 Shell 指令。\n例如: `/exec ls -lh`")
-    elif text == "💀 进程管理": await show_processes(update, context) # Hidden from main menu but kept as command accessible if needed
+    elif text == "💀 进程管理": await show_processes(update, context) # Hidden command
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()

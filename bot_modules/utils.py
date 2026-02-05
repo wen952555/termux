@@ -21,13 +21,18 @@ async def send_toast(msg):
     except: pass
 
 async def clean_device():
-    """Ensure no background recording processes are blocking the device"""
+    """Aggressively clean up recording processes using pkill"""
     try:
-        # Quit any existing recording sessions
+        # Method 1: Standard quit command
         subprocess.run("termux-microphone-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
         subprocess.run("termux-camera-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
         
-        # Try using absolute paths if simple command fails
+        # Method 2: Force kill process by name (requires pkill/killall)
+        # This fixes 'resource busy' errors when previous recording crashed
+        subprocess.run("pkill -f termux-microphone-record", shell=True, stderr=subprocess.DEVNULL)
+        subprocess.run("pkill -f termux-camera-record", shell=True, stderr=subprocess.DEVNULL)
+        
+        # Method 3: Absolute path cleanup for PRoot
         base = "/data/data/com.termux/files/usr/bin"
         subprocess.run(f"{base}/termux-microphone-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
         subprocess.run(f"{base}/termux-camera-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
