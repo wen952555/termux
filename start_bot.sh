@@ -87,6 +87,18 @@ view_logs() {
     pm2 log $PM2_NAME
 }
 
+# 函数: 强制更新
+update_bot() {
+    echo -e "${BLUE}正在强制拉取最新代码...${NC}"
+    echo "这将会覆盖本地的修改。"
+    git fetch --all
+    git reset --hard origin/main
+    git pull
+    chmod +x start_bot.sh
+    echo -e "${GREEN}更新完成！请重新运行脚本。${NC}"
+    exit 0
+}
+
 # 主菜单
 echo "请选择操作:"
 echo "1) 🚀 使用 PM2 启动/重启 (后台运行，推荐)"
@@ -94,8 +106,9 @@ echo "2) 📝 查看 PM2 日志"
 echo "3) 🛑 停止 PM2 服务"
 echo "4) 🐛 前台直接运行 (调试用)"
 echo "5) 🚪 退出"
+echo "6) 🔄 强制更新 Bot (修复 Git 冲突)"
 
-read -p "请输入选项 [1-5]: " choice
+read -p "请输入选项 [1-6]: " choice
 
 case $choice in
     1)
@@ -114,6 +127,9 @@ case $choice in
         ;;
     5)
         exit 0
+        ;;
+    6)
+        update_bot
         ;;
     *)
         echo "无效选项"
