@@ -37,8 +37,6 @@ const mediaServerPlugin = () => ({
       // 1. System Stats API
       if (req.url === '/api/system' && req.method === 'GET') {
         const cpus = os.cpus();
-        // Calculate CPU usage roughly based on load avg for simplicity in this context, 
-        // or just use loadavg[0] normalized by core count.
         const loadAvg = os.loadavg();
         const cpuUsage = Math.min(100, (loadAvg[0] / cpus.length) * 100);
         
@@ -46,16 +44,12 @@ const mediaServerPlugin = () => ({
         const freeMem = os.freemem();
         const usedMem = totalMem - freeMem;
 
-        // Get Disk Usage asynchronously
         exec('df -k /', (err, stdout) => {
           let diskInfo = { total: 0, free: 0, used: 0, percent: 0 };
           if (!err && stdout) {
             const lines = stdout.trim().split('\n');
             if (lines.length > 1) {
               const parts = lines[1].replace(/\s+/g, ' ').split(' ');
-              // df -k output: Filesystem 1K-blocks Used Available Use% Mounted on
-              // Index might vary slightly depending on OS implementation, usually:
-              // total=1, used=2, available=3, percent=4
               if (parts.length >= 5) {
                 diskInfo = {
                   total: parseInt(parts[1]) * 1024,
@@ -151,16 +145,40 @@ const mediaServerPlugin = () => ({
         return;
       }
 
-      // 4. Static File Serving (captured_media)
+      // 4. Static File Serving with Range Support (Video Streaming)
       if (req.url?.startsWith('/captured_media/')) {
         const fileName = path.basename(req.url);
         const safeFileName = decodeURIComponent(fileName);
         const filePath = path.join(mediaDir, safeFileName);
+        
         if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
            const mimeType = getMimeType(safeFileName);
-           res.setHeader('Content-Type', mimeType);
-           const stream = fs.createReadStream(filePath);
-           stream.pipe(res);
+           const stat = fs.statSync(filePath);
+           const fileSize = stat.size;
+           const range = req.headers.range;
+
+           if (range) {
+             const parts = range.replace(/bytes=/, "").split("-");
+             const start = parseInt(parts[0], 10);
+             const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+             const chunksize = (end - start) + 1;
+             const file = fs.createReadStream(filePath, { start, end });
+             const head = {
+               'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+               'Accept-Ranges': 'bytes',
+               'Content-Length': chunksize,
+               'Content-Type': mimeType,
+             };
+             res.writeHead(206, head);
+             file.pipe(res);
+           } else {
+             const head = {
+               'Content-Length': fileSize,
+               'Content-Type': mimeType,
+             };
+             res.writeHead(200, head);
+             fs.createReadStream(filePath).pipe(res);
+           }
            return; 
         }
       }

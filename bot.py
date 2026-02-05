@@ -2,13 +2,9 @@ import logging
 import os
 import subprocess
 import sys
-import platform
 import psutil
 import json
-import time
 import socket
-import shutil
-import glob
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
@@ -28,10 +24,10 @@ logger = logging.getLogger(__name__)
 # Main Menu Layout
 MENU_KEYBOARD = [
     [KeyboardButton("📊 系统状态"), KeyboardButton("📂 文件管理")],
-    [KeyboardButton("📸 拍摄照片"), KeyboardButton("🎤 录制音频")],
-    [KeyboardButton("🔦 开启手电"), KeyboardButton("🌑 关闭手电")],
-    [KeyboardButton("🔋 电池信息"), KeyboardButton("💀 进程管理")],
-    [KeyboardButton("🌐 公网 IP"), KeyboardButton("💻 终端命令")],
+    [KeyboardButton("📸 拍摄照片"), KeyboardButton("📹 录制视频")],
+    [KeyboardButton("🎤 录制音频"), KeyboardButton("🔦 手电筒")],
+    [KeyboardButton("🔋 电池信息"), KeyboardButton("🌐 公网 IP")],
+    [KeyboardButton("💀 进程管理"), KeyboardButton("💻 终端命令")]
 ]
 
 if not os.path.exists(MEDIA_DIR):
@@ -41,16 +37,6 @@ def check_admin(user_id):
     return str(user_id) == str(ADMIN_ID)
 
 # --- UTILITIES ---
-
-def get_distro_name():
-    try:
-        if os.path.exists("/etc/os-release"):
-            with open("/etc/os-release") as f:
-                for line in f:
-                    if line.startswith("PRETTY_NAME="):
-                        return line.split("=")[1].strip().strip('"')
-    except: pass
-    return "Linux"
 
 def get_size(bytes, suffix="B"):
     factor = 1024
@@ -62,10 +48,18 @@ async def send_toast(msg):
     """Send Android Toast notification via Termux API"""
     try:
         cmd = f"termux-toast '{msg}'"
-        # Try direct or full path
         full_path = "/data/data/com.termux/files/usr/bin/termux-toast"
         subprocess.run(f"{cmd} || {full_path} '{msg}'", shell=True, timeout=2)
     except: pass
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(f"❌ 发生内部错误: {context.error}")
+    except:
+        pass
 
 # --- HANDLERS ---
 
@@ -81,16 +75,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_files(update: Update, context: ContextTypes.DEFAULT_TYPE, path="."):
     abs_path = os.path.abspath(path)
-    
-    # Security: Don't allow going above root (though root is fine in Termux)
     if not os.path.exists(abs_path):
         await update.message.reply_text("❌ 路径不存在")
         return
 
-    # Store current path in user_data
     context.user_data['cwd'] = abs_path
     
-    # List items
     try:
         items = sorted(os.listdir(abs_path))
     except Exception as e:
@@ -98,21 +88,19 @@ async def show_files(update: Update, context: ContextTypes.DEFAULT_TYPE, path=".
         return
 
     keyboard = []
-    # Add "Up" button if not root
     if abs_path != "/":
         keyboard.append([InlineKeyboardButton("⬆️ 上一级", callback_data="dir:..")])
 
-    # Add folders first, then files (limit to 20 items for UI stability)
     folders = [i for i in items if os.path.isdir(os.path.join(abs_path, i))]
     files = [i for i in items if os.path.isfile(os.path.join(abs_path, i))]
     
-    # Pagination or Truncation could be added here. For now, we take top 10 folders and top 10 files.
+    # Show top 10 folders and top 10 files to avoid hitting message limits
     for f in folders[:10]:
         keyboard.append([InlineKeyboardButton(f"📂 {f}", callback_data=f"dir:{f}")])
     for f in files[:10]:
         keyboard.append([InlineKeyboardButton(f"📄 {f}", callback_data=f"file:{f}")])
     
-    text = f"📂 **当前路径**: `{abs_path}`\n(只显示前20项)"
+    text = f"📂 **当前路径**: `{abs_path}`\n(仅显示前20项)"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -153,7 +141,6 @@ async def show_processes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             procs.append(p.info)
         except: pass
     
-    # Sort by CPU usage
     top_procs = sorted(procs, key=lambda p: p['cpu_percent'] or 0, reverse=True)[:6]
     
     keyboard = []
@@ -162,7 +149,6 @@ async def show_processes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"kill:{p['pid']}")])
     
     keyboard.append([InlineKeyboardButton("🔄 刷新", callback_data="refresh_ps")])
-    
     text = "💀 **进程管理**\n点击按钮强制结束进程 (Kill -9)"
     
     if update.callback_query:
@@ -184,24 +170,34 @@ async def handle_process_callback(update: Update, context: ContextTypes.DEFAULT_
         try:
             os.kill(pid, 9)
             await query.answer(f"已结束进程 PID {pid}")
-            await show_processes(update, context) # Refresh list
+            await show_processes(update, context)
         except Exception as e:
             await query.answer(f"失败: {e}", show_alert=True)
 
-# --- SYSTEM & UTILS ---
+# --- FLASHLIGHT LOGIC ---
 
-async def check_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🌐 查询中...")
+async def show_torch_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🔦 开启", callback_data="torch:on"), 
+         InlineKeyboardButton("🌑 关闭", callback_data="torch:off")]
+    ]
+    await update.message.reply_text("💡 **手电筒控制**\n请选择状态:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def handle_torch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    action = query.data.split(":")[1] # on or off
+    
+    cmd = f"termux-torch {action}"
+    alt = f"/data/data/com.termux/files/usr/bin/termux-torch {action}"
+    
     try:
-        # Get local IP
-        local_ip = socket.gethostbyname(socket.gethostname())
-        # Get public IP via curl
-        public_ip = subprocess.check_output("curl -s ifconfig.me", shell=True, timeout=5).decode().strip()
-        
-        text = f"🌐 **网络信息**\n\n🏠 **内网 IP**: `{local_ip}`\n🌍 **公网 IP**: `{public_ip}`"
-        await msg.edit_text(text, parse_mode='Markdown')
+        subprocess.run(f"{cmd} || {alt}", shell=True)
+        state_text = "开启" if action == "on" else "关闭"
+        await query.answer(f"手电筒已{state_text}")
     except Exception as e:
-        await msg.edit_text(f"❌ 查询失败: {e}")
+        await query.answer(f"执行失败: {e}", show_alert=True)
+
+# --- MEDIA & SYSTEM ---
 
 async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cpu = psutil.cpu_percent()
@@ -216,11 +212,19 @@ async def system_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
+async def check_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🌐 查询中...")
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+        public_ip = subprocess.check_output("curl -s ifconfig.me", shell=True, timeout=5).decode().strip()
+        text = f"🌐 **网络信息**\n\n🏠 **内网 IP**: `{local_ip}`\n🌍 **公网 IP**: `{public_ip}`"
+        await msg.edit_text(text, parse_mode='Markdown')
+    except Exception as e:
+        await msg.edit_text(f"❌ 查询失败: {e}")
+
 async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     chat_id = update.effective_chat.id
-    
-    # Path configuration
     termux_bin = "/data/data/com.termux/files/usr/bin"
     
     if media_type == "photo":
@@ -228,37 +232,40 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
         cmd = f"termux-camera-photo -c 0 {filename}"
         alt_cmd = f"{termux_bin}/termux-camera-photo -c 0 {filename}"
         msg = "📸 拍照中..."
+    elif media_type == "video":
+        filename = os.path.join(MEDIA_DIR, f"vid_{timestamp}.mp4")
+        # 30 second limit
+        cmd = f"termux-camera-record -l 30 {filename}"
+        alt_cmd = f"{termux_bin}/termux-camera-record -l 30 {filename}"
+        msg = "📹 录制视频中 (30秒)..."
     else:
         filename = os.path.join(MEDIA_DIR, f"rec_{timestamp}.m4a")
-        cmd = f"termux-microphone-record -l 10 -e aac -f {filename}"
-        alt_cmd = f"{termux_bin}/termux-microphone-record -l 10 -e aac -f {filename}"
-        msg = "🎤 录音中 (10s)..."
+        # 30 second limit
+        cmd = f"termux-microphone-record -l 30 -e aac -f {filename}"
+        alt_cmd = f"{termux_bin}/termux-microphone-record -l 30 -e aac -f {filename}"
+        msg = "🎤 录音中 (30秒)..."
 
     status_msg = await update.message.reply_text(msg)
     
     try:
-        subprocess.run(f"{cmd} || {alt_cmd}", shell=True, timeout=15, capture_output=True)
+        # Timeout slightly longer than recording time
+        subprocess.run(f"{cmd} || {alt_cmd}", shell=True, timeout=40, capture_output=True)
+        
         if os.path.exists(filename) and os.path.getsize(filename) > 0:
             await status_msg.edit_text("📤 上传中...")
             with open(filename, 'rb') as f:
                 if media_type == "photo":
                     await context.bot.send_photo(chat_id, f)
+                elif media_type == "video":
+                    await context.bot.send_video(chat_id, f)
                 else:
                     await context.bot.send_audio(chat_id, f)
             await status_msg.delete()
-            # Try to show toast on phone
             await send_toast(f"Bot: Captured {media_type}")
         else:
-            await status_msg.edit_text("❌ 获取媒体失败。请确保 Termux:API 已安装并授权。")
+            await status_msg.edit_text("❌ 获取媒体失败。\n请检查 Termux:API 是否安装，并授予了摄像头/麦克风权限。")
     except Exception as e:
         await status_msg.edit_text(f"❌ 错误: {e}")
-
-async def toggle_torch(update: Update, state: bool):
-    arg = "on" if state else "off"
-    cmd = f"termux-torch {arg}"
-    alt = f"/data/data/com.termux/files/usr/bin/termux-torch {arg}"
-    subprocess.run(f"{cmd} || {alt}", shell=True)
-    await update.message.reply_text(f"🔦 手电筒已{'开启' if state else '关闭'}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
@@ -268,12 +275,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📂 文件管理": await show_files(update, context, ".")
     elif text == "💀 进程管理": await show_processes(update, context)
     elif text == "📸 拍摄照片": await capture_media(update, context, "photo")
+    elif text == "📹 录制视频": await capture_media(update, context, "video")
     elif text == "🎤 录制音频": await capture_media(update, context, "audio")
-    elif text == "🔦 开启手电": await toggle_torch(update, True)
-    elif text == "🌑 关闭手电": await toggle_torch(update, False)
+    elif text == "🔦 手电筒": await show_torch_menu(update, context)
     elif text == "🌐 公网 IP": await check_ip(update, context)
     elif text == "🔋 电池信息": 
-        # Attempt to get battery status
         try:
             res = subprocess.check_output("termux-battery-status || /data/data/com.termux/files/usr/bin/termux-battery-status", shell=True).decode()
             data = json.loads(res)
@@ -302,6 +308,10 @@ def main():
     # Callback Handlers
     app.add_handler(CallbackQueryHandler(handle_file_callback, pattern="^(dir|file):"))
     app.add_handler(CallbackQueryHandler(handle_process_callback, pattern="^(kill:|refresh_ps)"))
+    app.add_handler(CallbackQueryHandler(handle_torch_callback, pattern="^torch:"))
+
+    # Error Handler
+    app.add_error_handler(error_handler)
 
     print("Bot is running...")
     app.run_polling()

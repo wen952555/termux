@@ -41,6 +41,7 @@ export const generateBotScript = async (config: BotConfig): Promise<{ code: stri
     
     Instructions for logic:
     - If "Battery" or "Camera" is requested: Try to use 'termux-battery-status'/'termux-camera-photo'. Warn in comments that these might require running in Native Termux or configuring termux-exec in Ubuntu.
+    - If "Audio" or "Video" recording is requested: Always set the duration flag to 30 seconds (e.g., -l 30) unless specified otherwise.
     - If "System Monitor" is requested: Use 'psutil' as it works well in both Ubuntu and Termux. Output format should be easy to read on mobile.
     - If "Service Manager": Support checking systemctl (if using proot-distro with systemd shim) or standard service commands, but prefer simple process checks for Termux compatibility.
     - LANGUAGE REQUIREMENT: The entire Python script interaction (messages sent to Telegram) MUST be in CHINESE.
