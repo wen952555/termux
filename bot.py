@@ -30,8 +30,10 @@ logger = logging.getLogger(__name__)
 MENU_KEYBOARD = [
     [KeyboardButton("📊 系统状态"), KeyboardButton("📈 进程列表")],
     [KeyboardButton("📸 拍摄照片"), KeyboardButton("📹 录制视频")],
-    [KeyboardButton("🗑 清理媒体"), KeyboardButton("🛠 服务探测")],
-    [KeyboardButton("🔋 电池信息"), KeyboardButton("🔄 检查更新")]
+    [KeyboardButton("🎤 录制音频"), KeyboardButton("🗑 清理媒体")],
+    [KeyboardButton("🔦 开启手电"), KeyboardButton("🌑 关闭手电")],
+    [KeyboardButton("🔋 电池信息"), KeyboardButton("🛠 服务探测")],
+    [KeyboardButton("💻 终端命令"), KeyboardButton("🔄 检查更新")]
 ]
 
 # 确保媒体目录存在
@@ -110,10 +112,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await capture_media(update, context, "photo")
     elif text == "📹 录制视频":
         await capture_media(update, context, "video")
+    elif text == "🎤 录制音频":
+        await capture_media(update, context, "audio")
+    elif text == "🔦 开启手电":
+        await toggle_torch(update, context, True)
+    elif text == "🌑 关闭手电":
+        await toggle_torch(update, context, False)
     elif text == "🗑 清理媒体":
         await clean_media_files(update, context)
         
     # 管理类
+    elif text == "💻 终端命令":
+        msg = (
+            "💻 **终端命令执行指南**\n\n"
+            "请使用 `/exec` 命令来运行 Shell 指令。\n\n"
+            "**常用示例:**\n"
+            "• `/exec ls -lh` (查看当前目录文件)\n"
+            "• `/exec ip a` (查看 IP 地址)\n"
+            "• `/exec pm2 list` (查看后台任务)\n"
+            "• `/exec whoami` (查看当前用户)"
+        )
+        await update.message.reply_text(msg, parse_mode='Markdown')
     elif text == "🔄 检查更新":
         await update_bot_command(update, context)
     elif text == "❓ 帮助":
@@ -121,34 +140,76 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 核心功能函数 ---
 
+async def toggle_torch(update: Update, context: ContextTypes.DEFAULT_TYPE, state: bool):
+    """控制手电筒开关"""
+    cmd_base = "termux-torch"
+    full_path = "/data/data/com.termux/files/usr/bin/termux-torch"
+    arg = "on" if state else "off"
+    
+    msg = await update.message.reply_text(f"⚡ 正在{'开启' if state else '关闭'}手电筒...")
+    
+    try:
+        # 同时尝试直接命令和绝对路径
+        cmd = f"{cmd_base} {arg} || {full_path} {arg}"
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+        
+        if res.returncode == 0:
+            await msg.edit_text(f"✅ 手电筒已{'开启' if state else '关闭'}")
+        else:
+            err_info = res.stderr.strip() or "未知错误"
+            await msg.edit_text(f"❌ 操作失败: {err_info}\n请确认已安装 Termux:API 并授予相机权限。")
+    except Exception as e:
+        await msg.edit_text(f"❌ 执行错误: {e}")
+
 async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type="photo"):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     chat_id = update.effective_chat.id
     
+    # 确保目录存在
+    if not os.path.exists(MEDIA_DIR):
+        os.makedirs(MEDIA_DIR)
+    
+    # 根据类型配置命令
     if media_type == "photo":
         filename = f"{MEDIA_DIR}/photo_{timestamp}.jpg"
-        # 尝试两个路径，优先使用 path 变量中的，失败则尝试绝对路径
-        cmd = f"termux-camera-photo -c 0 {filename}"
-        alt_cmd = f"/data/data/com.termux/files/usr/bin/termux-camera-photo -c 0 {filename}"
+        cmd_base = "termux-camera-photo -c 0"
+        path_base = "/data/data/com.termux/files/usr/bin/termux-camera-photo -c 0"
+        cmd = f"{cmd_base} {filename}"
+        alt_cmd = f"{path_base} {filename}"
         msg_text = "📸 正在拍摄..."
-    else:
+        timeout_val = 10
+        
+    elif media_type == "video":
         filename = f"{MEDIA_DIR}/video_{timestamp}.mp4"
-        duration = 5 # 视频时长秒
-        cmd = f"termux-camera-record -c 0 -l {duration} {filename}"
-        alt_cmd = f"/data/data/com.termux/files/usr/bin/termux-camera-record -c 0 -l {duration} {filename}"
+        duration = 5
+        cmd_base = f"termux-camera-record -c 0 -l {duration}"
+        path_base = f"/data/data/com.termux/files/usr/bin/termux-camera-record -c 0 -l {duration}"
+        cmd = f"{cmd_base} {filename}"
+        alt_cmd = f"{path_base} {filename}"
         msg_text = f"📹 正在录制 ({duration}s)..."
+        timeout_val = 15
 
+    elif media_type == "audio":
+        filename = f"{MEDIA_DIR}/audio_{timestamp}.m4a" # m4a 格式通常兼容性较好
+        duration = 10
+        # termux-microphone-record -l <seconds> -f <file>
+        cmd_base = f"termux-microphone-record -l {duration} -e aac"
+        path_base = f"/data/data/com.termux/files/usr/bin/termux-microphone-record -l {duration} -e aac"
+        cmd = f"{cmd_base} -f {filename}"
+        alt_cmd = f"{path_base} -f {filename}"
+        msg_text = f"🎤 正在录音 ({duration}s)..."
+        timeout_val = 20
+        
     status_msg = await update.message.reply_text(msg_text)
     
     # 执行命令
     try:
-        # 使用 timeout 防止卡死，视频录制需要稍微多一点时间
-        timeout_val = 15 if media_type == "video" else 10
-        subprocess.run(f"{cmd} || {alt_cmd}", shell=True, timeout=timeout_val, capture_output=True)
+        result = subprocess.run(f"{cmd} || {alt_cmd}", shell=True, timeout=timeout_val, capture_output=True, text=True)
     except subprocess.TimeoutExpired:
-        pass # 有时候录制会超时但文件已生成
+        # 视频/音频录制有时会超时但实际上已经开始或完成（尤其是后台运行时）
+        pass 
     except Exception as e:
-        await status_msg.edit_text(f"❌ 命令执行出错: {e}")
+        await status_msg.edit_text(f"❌ 命令执行异常: {e}")
         return
 
     # 检查文件并发送
@@ -158,13 +219,23 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
             with open(filename, 'rb') as f:
                 if media_type == "photo":
                     await context.bot.send_photo(chat_id, photo=f, caption=f"📅 {timestamp}")
-                else:
+                elif media_type == "video":
                     await context.bot.send_video(chat_id, video=f, caption=f"📅 {timestamp}")
+                elif media_type == "audio":
+                    await context.bot.send_audio(chat_id, audio=f, caption=f"📅 {timestamp}", title=f"Audio {timestamp}")
             await status_msg.delete()
         except Exception as e:
             await status_msg.edit_text(f"❌ 发送失败: {e}")
     else:
-        await status_msg.edit_text(f"❌ 获取失败 (请检查 Termux:API 权限)\n未能生成文件: {filename}")
+        # 详细的错误诊断
+        error_detail = ""
+        if 'result' in locals() and result.stderr:
+            error_detail = f"\n错误信息: `{result.stderr.strip()}`"
+        
+        perm_hint = "麦克风" if media_type == "audio" else "相机"
+        hint = f"\n\n💡 提示: \n1. 确保 Termux:API 已安装\n2. 确保已授予 Termux '{perm_hint}' 权限\n3. 如果录音失败，尝试在 Termux 中手动运行 `termux-microphone-record -h` 检查是否支持"
+        
+        await status_msg.edit_text(f"❌ 未能生成文件{error_detail}{hint}")
 
 async def clean_media_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
@@ -240,16 +311,34 @@ async def top_processes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 失败: {e}")
 
 async def check_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ports = {22: "SSH", 80: "HTTP", 8080: "Web", 3306: "MySQL", 6379: "Redis", 5173: "Vite Dev"}
+    # 常用服务端口定义
+    ports = {
+        22: "SSH (远程连接)", 
+        80: "HTTP (网页服务)", 
+        8080: "Web Proxy", 
+        3306: "MySQL (数据库)", 
+        6379: "Redis (缓存)", 
+        5173: "Monitor Web (监控台)"
+    }
+    
     results = []
     for port, name in ports.items():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.5)
+        # connect_ex 返回 0 表示连接成功（端口开放）
         res = sock.connect_ex(('127.0.0.1', port))
-        if res == 0: results.append(f"🟢 **{name}** ({port})")
+        if res == 0: 
+            results.append(f"🟢 **{name}** `:{port}` 运行中")
+        else:
+            # 也可以选择显示未运行的服务，这里为了简洁只显示运行中的
+            pass
         sock.close()
 
-    msg = "🛠 **服务探测**:\n" + ("\n".join(results) if results else "未检测到常用端口。")
+    if results:
+        msg = "🛠 **本地服务探测结果**:\n(检测常用端口是否开启)\n\n" + "\n".join(results)
+    else:
+        msg = "🛠 **本地服务探测结果**:\n\n⚠️ 未检测到常见服务 (SSH, MySQL, Web等)。\n这表示这些服务的端口没有在本地开启。"
+        
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def get_battery(update: Update, context: ContextTypes.DEFAULT_TYPE):
