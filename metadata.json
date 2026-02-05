@@ -1,0 +1,5 @@
+{
+  "name": "Termux BotGen AI",
+  "description": "An AI-powered tool to generate custom Telegram Bot scripts for monitoring and managing your Termux environment.",
+  "requestFramePermissions": []
+}
