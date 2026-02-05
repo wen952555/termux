@@ -1,41 +1,40 @@
 # Termux Telegram Bot
 
-专为 Termux 和 Ubuntu (PRoot/Chroot) 环境设计的管理机器人。
+专为 Termux 和 Ubuntu (PRoot/Chroot) 环境设计的全能管理机器人。
 
-## 🚀 极速部署 (Termux 原生)
+## 🚀 极速更新/部署
 
-如果你是第一次运行，或者遇到了 git 错误，直接复制下面的命令运行：
+复制以下命令在 Termux 中运行，可以强制修复冲突并更新到最新版本：
 
 ```bash
-# 强制更新代码并修复冲突
-git fetch --all && git reset --hard origin/main && git pull && chmod +x start_bot.sh
-
-# 启动管理菜单
+cd ~/termux && git fetch --all && git reset --hard origin/main && git pull && chmod +x start_bot.sh
 ./start_bot.sh
 ```
 
-在菜单中选择 **1** 即可全自动安装依赖并后台运行。
+## 功能列表
 
-## 功能特性
+1.  **系统监控**: CPU、内存、磁盘、网络、进程 (Top 5)。
+2.  **📂 文件管理 (新增)**:
+    *   **浏览**: 点击菜单或输入 `/ls` 查看当前目录。
+    *   **下载**: 使用 `/get <文件名>` 将 Termux 中的文件发送到 Telegram。
+    *   **上传**: 直接发送文件给机器人，会自动保存到 `Downloads` 文件夹。
+3.  **硬件控制**: 电池状态查询、远程拍照 (需 Termux:API)。
+4.  **服务探测**: 自动扫描 SSH, MySQL, HTTP 等端口。
+5.  **进程守护**: 支持 PM2 后台运行，掉线自动重启。
 
-*   **跨环境兼容**: 自动检测 Native Termux 或 Ubuntu PRoot 环境。
-*   **PM2 进程守护**: 掉线自动重启，后台稳定运行。
-*   **服务探测**: 自动检测 SSH, HTTP, MySQL 等常用服务端口。
-*   **进程监控**: 查看 Top 5 CPU 占用进程。
-*   **Termux API 集成**: 支持电池查询、拍照等功能。
+## 常用命令
 
-## 手动安装依赖
+*   `/start` - 显示主菜单
+*   `/ls [路径]` - 列出文件
+*   `/get <文件路径>` - 下载文件
+*   `/exec <命令>` - 执行 Shell 命令
+*   `/photo` - 拍照
 
-如果脚本自动安装失败，可以尝试手动运行：
+## 依赖安装
 
+如果自动安装失败：
 ```bash
-# Ubuntu
-apt update && apt install python3 python3-pip nodejs npm -y
-pip3 install python-telegram-bot psutil
-npm install -g pm2
-
-# Termux Native
-pkg update && pkg install python nodejs -y
+pkg install python nodejs termux-api -y
 pip install python-telegram-bot psutil
 npm install -g pm2
 ```
