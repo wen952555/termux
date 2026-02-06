@@ -56,7 +56,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🗑 清理媒体": await cleanup_media(update, context)
     elif text == "🔄 强制更新": await force_update(update, context)
     elif text == "📸 拍摄照片": await capture_media(update, context, "photo")
-    elif text == "💥 连拍模式": await capture_media(update, context, "burst") # Changed from video
+    
+    # 兼容旧菜单的 "录制视频" 按钮，将其导向连拍模式
+    elif text == "💥 连拍模式" or text == "📹 录制视频": 
+        if text == "📹 录制视频":
+            await update.message.reply_text(
+                "⚠️ **菜单已过期**\n视频功能已升级为连拍模式。\n正在为您执行连拍...",
+                reply_markup=ReplyKeyboardMarkup(MENU_KEYBOARD, resize_keyboard=True) # 顺便刷新用户的键盘
+            )
+        await capture_media(update, context, "burst")
+        
     elif text == "🎤 录制音频": await capture_media(update, context, "audio")
     elif text == "🔦 手电筒": await toggle_torch(update, context)
     elif text == "🌐 公网 IP": await check_ip(update, context)
