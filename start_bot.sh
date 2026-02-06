@@ -8,43 +8,44 @@ NC='\033[0m'
 
 BOT_FILE="bot.py"
 PM2_NAME="termux-bot"
-TUNNEL_NAME="cloudflared"
+TOKEN_FILE=".tunnel_token"
+BOOT_DIR="$HOME/.termux/boot"
 
-echo -e "${GREEN}=== Termux 环境自动修复与启动 ===${NC}"
+echo -e "${GREEN}=== Termux 自动修复与启动脚本 ===${NC}"
 
 # --- 1. 基础依赖修复 ---
 
 check_packages() {
-    echo -e "${YELLOW}[1/4] 检查系统组件...${NC}"
+    echo -e "${YELLOW}[1/5] 检查系统环境...${NC}"
     
-    # 自动更新源 (修复找不到包的问题)
+    # 确保 pkg 可用
     if ! command -v pkg &> /dev/null; then
-        echo -e "${RED}严重错误: pkg 命令丢失，您的 Termux 环境可能已损坏。${NC}"
+        echo -e "${RED}❌ 错误: pkg 命令丢失，环境可能已损坏。${NC}"
         exit 1
     fi
 
-    # 检查 termux-api
+    # 自动修复 termux-api (防止被系统误删)
     if ! command -v termux-camera-record &> /dev/null; then
-        echo -e "${YELLOW}>> 检测到 termux-api 丢失，正在重装...${NC}"
-        pkg update -y
+        echo -e "${YELLOW}>> 正在恢复 termux-api...${NC}"
+        pkg update -y -o Dpkg::Options::="--force-confnew"
         pkg install termux-api -y
     fi
 
-    # 检查 Python
+    # 检查 Python 环境
     if ! command -v python &> /dev/null; then
         echo -e "${YELLOW}>> 正在安装 Python...${NC}"
         pkg install python -y
     fi
     
-    # 检查 Python 库
+    # 检查 Python 依赖
     if ! python -c "import telegram" &> /dev/null; then
-        echo -e "${YELLOW}>> 恢复 Python 依赖库...${NC}"
+        echo -e "${YELLOW}>> 正在安装 Python 库...${NC}"
         pip install -r requirements.txt
     fi
 
-    # 检查 Node.js / PM2
+    # 检查 PM2
     if ! command -v pm2 &> /dev/null; then
-        echo -e "${YELLOW}>> 正在安装进程管理器 (PM2)...${NC}"
+        echo -e "${YELLOW}>> 正在安装 PM2...${NC}"
         if ! command -v npm &> /dev/null; then
              pkg install nodejs -y
         fi
@@ -55,10 +56,10 @@ check_packages() {
 # --- 2. Cloudflare 隧道修复 ---
 
 check_cloudflared() {
-    echo -e "${YELLOW}[2/4] 检查 Cloudflare 隧道...${NC}"
+    echo -e "${YELLOW}[2/5] 检查 Cloudflare 组件...${NC}"
     
     if [ ! -f "./cloudflared" ]; then
-        echo -e "${YELLOW}>> 未找到 cloudflared，正在下载...${NC}"
+        echo -e "${YELLOW}>> 下载 cloudflared...${NC}"
         ARCH=$(uname -m)
         case $ARCH in
             aarch64) CF_ARCH="arm64" ;;
@@ -67,67 +68,141 @@ check_cloudflared() {
             *) echo -e "${RED}不支持的架构: $ARCH${NC}"; return ;;
         esac
         
-        echo "下载架构: $CF_ARCH"
         curl -L --output cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-android-$CF_ARCH"
         chmod +x cloudflared
-        echo -e "${GREEN}cloudflared 下载完成${NC}"
-    else
-        echo -e "${GREEN}cloudflared 已存在${NC}"
     fi
 }
 
-# --- 3. 启动逻辑 ---
+# --- 3. 启动隧道 ---
 
 start_tunnel() {
-    local TOKEN=$1
+    local INPUT_TOKEN=$1
+
+    # 1. 保存 Token (如果有输入)
+    if [ -n "$INPUT_TOKEN" ]; then
+        echo "$INPUT_TOKEN" > "$TOKEN_FILE"
+        echo -e "${GREEN}✅ Tunnel Token 已保存至本地${NC}"
+    fi
+
+    # 2. 读取 Token
+    if [ -f "$TOKEN_FILE" ]; then
+        TOKEN=$(cat "$TOKEN_FILE")
+    else
+        TOKEN=""
+    fi
+
+    # 3. 检查 Token 是否存在
     if [ -z "$TOKEN" ]; then
-        echo -e "${YELLOW}提示: 未提供 Tunnel Token，跳过隧道启动。${NC}"
-        echo "用法: ./start_bot.sh tunnel <你的Token>"
+        echo -e "${RED}❌ 错误: 未找到 Tunnel Token。${NC}"
+        echo -e "请运行: ./start_bot.sh tunnel <你的Token>"
         return
     fi
 
-    echo -e "${YELLOW}[3/4] 启动 Cloudflare 隧道...${NC}"
-    # 先停止旧的
+    echo -e "${YELLOW}[3/5] 启动 Cloudflare 隧道...${NC}"
+    # 停止旧的进程
     pkill -f cloudflared > /dev/null 2>&1
     
     # 后台启动
     nohup ./cloudflared tunnel run --token $TOKEN > cloudflared.log 2>&1 &
-    echo -e "${GREEN}✅ 隧道已在后台启动 (日志: cloudflared.log)${NC}"
+    
+    sleep 2
+    if pgrep -f cloudflared > /dev/null; then
+        echo -e "${GREEN}✅ 隧道运行中 (Cloudflare Tunnel)${NC}"
+    else
+        echo -e "${RED}⚠️ 隧道启动失败，请检查 Token 是否正确${NC}"
+        cat cloudflared.log
+    fi
 }
 
+# --- 4. 配置开机自启 (无人值守模式) ---
+
+setup_autostart() {
+    echo -e "${YELLOW}[配置开机自启]...${NC}"
+    
+    # 1. 检查是否安装了 Termux:Boot 应用
+    if [ ! -d "$BOOT_DIR" ]; then
+        echo -e "${RED}❌ 未检测到 Termux:Boot 目录 ($BOOT_DIR)${NC}"
+        echo -e "请务必先安装 'Termux:Boot' APP (可在 F-Droid 或 Google Play 下载)"
+        echo -e "安装后，请运行一次 Termux:Boot 应用以初始化。"
+        mkdir -p "$BOOT_DIR"
+    fi
+
+    # 2. 获取当前脚本绝对路径
+    PROJECT_DIR=$(pwd)
+    BOOT_SCRIPT="$BOOT_DIR/start_bot_service"
+
+    echo -e "正在生成启动脚本: $BOOT_SCRIPT"
+
+    # 3. 写入启动脚本
+    cat > "$BOOT_SCRIPT" <<EOF
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux Boot Script generated by BotGen AI
+
+# 1. 申请唤醒锁，防止手机休眠断网
+termux-wake-lock
+
+# 2. 等待网络连接 (给 wifi 连接一点时间)
+sleep 10
+
+# 3. 进入项目目录并启动
+cd "$PROJECT_DIR"
+./start_bot.sh start >> boot.log 2>&1
+EOF
+
+    chmod +x "$BOOT_SCRIPT"
+    
+    echo -e "${GREEN}✅ 开机启动脚本已配置！${NC}"
+    echo -e "⚠️ 重要提示："
+    echo -e "1. 请确保手机已安装 **Termux:Boot** 应用。"
+    echo -e "2. 请在手机设置中，将 Termux 和 Termux:Boot 的**电池优化**设置为'无限制'。"
+    echo -e "3. 建议在该脚本最后也配置 SSH 启动，以防 Bot 挂掉。"
+}
+
+# --- 5. 启动 Bot ---
+
 start_bot() {
-    echo -e "${YELLOW}[4/4] 启动 Bot 进程...${NC}"
+    echo -e "${YELLOW}[4/5] 启动 Bot...${NC}"
+    
+    # 尝试申请唤醒锁
+    if command -v termux-wake-lock &> /dev/null; then
+        termux-wake-lock
+        echo -e "已申请 Wake Lock (防止休眠)"
+    fi
 
-    # 停止旧进程防止冲突
     pm2 delete $PM2_NAME > /dev/null 2>&1
-
-    # 启动新进程
     pm2 start $BOT_FILE --name $PM2_NAME --interpreter python --no-autorestart
     pm2 save
     
-    echo -e "${GREEN}==============================${NC}"
-    echo -e "${GREEN}✅ 所有服务已恢复！${NC}"
-    echo -e "${GREEN}==============================${NC}"
-    echo -e "📊 查看 Bot 日志: ./start_bot.sh log"
-    echo -e "🐛 调试: 如果依然报错，请运行 pkg update 刷新源"
+    echo -e "\n${GREEN}🎉 系统运行中！${NC}"
+    echo -e "-----------------------------------"
+    echo -e "📡 远程 SSH 建议: 配合 Cloudflare Tunnel 配置 SSH 访问"
+    echo -e "⚙️ 开机自启: ./start_bot.sh autostart"
 }
 
-# --- 主菜单 ---
+# --- 菜单逻辑 ---
 
 ACTION=${1:-start}
-TOKEN=$2
+ARG_TOKEN=$2
 
 case "$ACTION" in
     start)
         check_packages
         check_cloudflared
+        if [ -f "$TOKEN_FILE" ]; then
+            start_tunnel
+        else
+            echo -e "${YELLOW}提示: 未配置隧道。如需外网访问请使用 ./start_bot.sh tunnel <TOKEN>${NC}"
+        fi
         start_bot
         ;;
     tunnel)
         check_packages
         check_cloudflared
-        start_tunnel $TOKEN
+        start_tunnel $ARG_TOKEN
         start_bot
+        ;;
+    autostart)
+        setup_autostart
         ;;
     log|logs)
         pm2 log $PM2_NAME
@@ -135,12 +210,17 @@ case "$ACTION" in
     stop)
         pm2 stop $PM2_NAME
         pkill -f cloudflared
+        # 释放唤醒锁
+        if command -v termux-wake-unlock &> /dev/null; then
+            termux-wake-unlock
+        fi
         echo "已停止所有服务"
         ;;
     *)
-        echo "用法:"
-        echo "  ./start_bot.sh start             # 仅启动 Bot (修复环境)"
-        echo "  ./start_bot.sh tunnel <TOKEN>    # 启动 Bot + Cloudflare隧道"
-        echo "  ./start_bot.sh log               # 查看日志"
+        echo "使用方法:"
+        echo "  ./start_bot.sh tunnel <TOKEN>   # 首次配置并启动"
+        echo "  ./start_bot.sh start            # 正常启动 (使用已保存配置)"
+        echo "  ./start_bot.sh autostart        # 配置开机自启 (需要 Termux:Boot)"
+        echo "  ./start_bot.sh log              # 查看日志"
         ;;
 esac
