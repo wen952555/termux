@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 from bot_modules.config import BOT_TOKEN, logger
 from bot_modules.utils import check_admin, error_handler
 from bot_modules.system import system_status, show_processes, handle_process_callback, force_update
-from bot_modules.media import capture_media, cleanup_media
+from bot_modules.media import capture_media, cleanup_media, play_received_audio
 from bot_modules.tools import show_torch_menu, handle_torch_callback, check_ip, exec_command
 
 # --- MENU LAYOUT ---
@@ -22,7 +22,7 @@ MENU_KEYBOARD = [
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
     await update.message.reply_text(
-        "🤖 **Termux 智能控制台**\n模块加载完成，请选择操作：",
+        "🤖 **Termux 智能控制台**\n模块加载完成。\n\n**提示:** 🗣 直接发送语音消息或音频文件，Bot 将在手机上播放！",
         reply_markup=ReplyKeyboardMarkup(MENU_KEYBOARD, resize_keyboard=True),
         parse_mode='Markdown'
     )
@@ -53,7 +53,11 @@ def main():
     app.add_handler(CommandHandler("update", force_update))
     
     # Message Handlers
+    # 1. 文本菜单处理
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # 2. 音频处理 (新增) - 监听 语音(Voice) 和 音频文件(Audio)
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, play_received_audio))
     
     # Callback Handlers (Router)
     app.add_handler(CallbackQueryHandler(handle_process_callback, pattern="^(kill:|refresh_ps)"))

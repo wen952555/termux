@@ -6,7 +6,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from .config import MEDIA_DIR, logger
-from .utils import clean_device, send_toast
+from .utils import clean_device, send_toast, check_admin
 
 async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type):
     chat_id = update.effective_chat.id
@@ -101,10 +101,69 @@ async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, medi
         logger.error(f"Media capture error: {e}")
         await status_msg.edit_text(f"❌ 执行出错: {str(e)}")
 
+async def play_received_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """下载并播放用户发送的音频"""
+    if not check_admin(update.effective_user.id): return
+
+    msg = await update.message.reply_text("📥 正在下载音频...")
+    
+    try:
+        # 1. 获取文件对象
+        file_obj = None
+        ext = ".ogg" # 默认语音消息格式
+        
+        if update.message.voice:
+            file_obj = await update.message.voice.get_file()
+            ext = ".ogg"
+        elif update.message.audio:
+            file_obj = await update.message.audio.get_file()
+            # 尝试获取原始扩展名，如果没有则默认mp3
+            if update.message.audio.file_name:
+                _, ext = os.path.splitext(update.message.audio.file_name)
+            else:
+                ext = ".mp3"
+        
+        if not file_obj:
+            await msg.edit_text("❌ 无法获取音频文件")
+            return
+
+        # 2. 保存文件
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"play_{timestamp}{ext}"
+        filepath = os.path.join(MEDIA_DIR, filename)
+        
+        await file_obj.download_to_drive(filepath)
+        
+        # 3. 调用 Termux 播放
+        await msg.edit_text("▶️ 正在 Termux 上播放...")
+        
+        # 使用 termux-media-player play <file>
+        cmd = f"termux-media-player play '{filepath}'"
+        
+        # 执行命令
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if proc.returncode == 0:
+            await msg.edit_text(f"✅ 播放请求已发送\n📄 文件: `{filename}`")
+            await send_toast(f"Playing: {filename}")
+        else:
+            # 尝试备用命令 play-audio
+            cmd_alt = f"play-audio '{filepath}'"
+            proc_alt = subprocess.run(cmd_alt, shell=True, capture_output=True, text=True)
+            if proc_alt.returncode == 0:
+                 await msg.edit_text(f"✅ 播放成功 (play-audio)\n📄 文件: `{filename}`")
+            else:
+                 await msg.edit_text(f"❌ 播放失败。请确保安装了 termux-api。\n错误: {proc.stderr}")
+
+    except Exception as e:
+        logger.error(f"Play audio error: {e}")
+        await msg.edit_text(f"❌ 错误: {e}")
+
 async def cleanup_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🗑 清理中...")
     try:
-        patterns = ["*.jpg", "*.mp4", "*.m4a"]
+        # 增加清理 .ogg 和 .mp3
+        patterns = ["*.jpg", "*.mp4", "*.m4a", "*.ogg", "*.mp3", "*.wav"]
         count = 0
         for pat in patterns:
             files = glob.glob(os.path.join(MEDIA_DIR, pat))
