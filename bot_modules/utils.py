@@ -1,7 +1,25 @@
 import subprocess
-from telegram import Update
-from telegram.ext import ContextTypes
+import shutil
+import os
 from .config import ADMIN_ID, logger
+
+def get_executable_path(cmd_name):
+    """
+    检查命令是否存在。
+    如果是原生 Termux，shutil.which 应该能直接找到。
+    """
+    # 1. 优先检测系统 PATH
+    path = shutil.which(cmd_name)
+    if path:
+        return path
+    
+    # 2. 备用检测 Termux 默认路径 (防止 PATH 环境变量异常)
+    termux_bin = f"/data/data/com.termux/files/usr/bin/{cmd_name}"
+    if os.path.exists(termux_bin):
+        return termux_bin
+        
+    # 3. 找不到
+    return None
 
 def check_admin(user_id):
     return str(user_id) == str(ADMIN_ID)
@@ -15,34 +33,15 @@ def get_size(bytes, suffix="B"):
 async def send_toast(msg):
     """Send Android Toast notification via Termux API"""
     try:
-        cmd = f"termux-toast '{msg}'"
-        full_path = "/data/data/com.termux/files/usr/bin/termux-toast"
-        subprocess.run(f"{cmd} || {full_path} '{msg}'", shell=True, timeout=2)
+        exe = get_executable_path("termux-toast")
+        if exe:
+            subprocess.run(f"{exe} '{msg}'", shell=True, timeout=2, stderr=subprocess.DEVNULL)
     except: pass
 
 async def clean_device():
-    """Aggressively clean up recording processes using pkill"""
+    """清理可能卡死的录制进程"""
     try:
-        # Method 1: Standard quit command
-        subprocess.run("termux-microphone-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
-        subprocess.run("termux-camera-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
-        
-        # Method 2: Force kill process by name (requires pkill/killall)
-        # This fixes 'resource busy' errors when previous recording crashed
-        subprocess.run("pkill -f termux-microphone-record", shell=True, stderr=subprocess.DEVNULL)
-        subprocess.run("pkill -f termux-camera-record", shell=True, stderr=subprocess.DEVNULL)
-        
-        # Method 3: Absolute path cleanup for PRoot
-        base = "/data/data/com.termux/files/usr/bin"
-        subprocess.run(f"{base}/termux-microphone-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
-        subprocess.run(f"{base}/termux-camera-record -q", shell=True, timeout=2, stderr=subprocess.DEVNULL)
+        subprocess.run("pkill -9 termux-camera", shell=True, stderr=subprocess.DEVNULL)
+        subprocess.run("pkill -9 termux-micro", shell=True, stderr=subprocess.DEVNULL)
     except: 
-        pass
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    try:
-        if isinstance(update, Update) and update.effective_message:
-            await update.effective_message.reply_text(f"❌ 发生内部错误: {context.error}")
-    except:
         pass
