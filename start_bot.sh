@@ -6,6 +6,11 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# =================配置区域=================
+# 您已将 Token 硬编码在此，无需再手动输入命令
+FIXED_TOKEN="eyJhIjoiOWFiNmE4YjQ0NGQ3MDA2OWNlMGIyM2RlMzVmNzE2ZDEiLCJ0IjoiNjA3YmM5NTctODdmYi00MTllLWIyZjYtZDIwZjU5ZTZjZjkxIiwicyI6IlpEVmpOVGd6WVRRdE4yRmhaUzAwTURVMExUaGxNR0l0WXpBME9UYzJaR0k0TTJZdyJ9"
+# ==========================================
+
 BOT_FILE="bot.py"
 PM2_NAME="termux-bot"
 TOKEN_FILE=".tunnel_token"
@@ -88,19 +93,26 @@ check_cloudflared() {
 # --- 3. 启动隧道 ---
 
 start_tunnel() {
-    local INPUT_TOKEN=$1
+    # 智能提取: 允许用户粘贴包含 "sudo cloudflared..." 的整段命令，这里只提取 Token
+    local RAW_ARGS="$*"
+    # 正则提取 eyJ 开头的长字符串 (Cloudflare Token 特征)
+    local EXTRACTED_TOKEN=$(echo "$RAW_ARGS" | grep -oE 'ey[A-Za-z0-9\-_=]{50,}' | head -n 1)
 
-    # 1. 保存 Token (如果有输入)
-    if [ -n "$INPUT_TOKEN" ]; then
-        echo "$INPUT_TOKEN" > "$TOKEN_FILE"
-        echo -e "${GREEN}✅ Tunnel Token 已保存至本地${NC}"
+    # 1. 确定 Token 优先级: 提取的 > 参数 > 文件 > 硬编码
+    TOKEN=""
+    
+    if [ -n "$EXTRACTED_TOKEN" ]; then
+        TOKEN="$EXTRACTED_TOKEN"
+        echo "$TOKEN" > "$TOKEN_FILE" # 更新本地缓存
+        echo -e "${GREEN}✅ 已识别并更新 Tunnel Token${NC}"
+    elif [ -f "$TOKEN_FILE" ]; then
+        TOKEN=$(cat "$TOKEN_FILE")
     fi
 
-    # 2. 读取 Token
-    if [ -f "$TOKEN_FILE" ]; then
-        TOKEN=$(cat "$TOKEN_FILE")
-    else
-        TOKEN=""
+    # 如果上述都没找到，使用硬编码的
+    if [ -z "$TOKEN" ] && [ -n "$FIXED_TOKEN" ]; then
+        TOKEN="$FIXED_TOKEN"
+        echo -e "${GREEN}✅ 使用脚本内置 Token${NC}"
     fi
 
     # 3. 检查 Token 是否存在
@@ -114,18 +126,21 @@ start_tunnel() {
     # 停止旧的进程
     pkill -f cloudflared > /dev/null 2>&1
     
-    # 后台启动 (不使用 service install，Termux 不支持)
-    # 添加 --no-autoupdate 防止自更新导致权限问题
-    nohup ./cloudflared tunnel --no-autoupdate run --token $TOKEN > cloudflared.log 2>&1 &
+    # 后台启动
+    # --no-autoupdate: 禁止自动更新
+    # --edge-ip-version 4: 强制使用 IPv4 (解决部分 Android DNS 解析到 ::1 的问题)
+    # --protocol http2: 使用 HTTP2 协议 (比 QUIC 更稳定)
+    nohup ./cloudflared tunnel --no-autoupdate --edge-ip-version 4 --protocol http2 run --token $TOKEN > cloudflared.log 2>&1 &
     
-    sleep 3
+    sleep 5
     if pgrep -f cloudflared > /dev/null; then
         echo -e "${GREEN}✅ 隧道运行中 (Cloudflare Tunnel)${NC}"
     else
         echo -e "${RED}⚠️ 隧道启动失败，请检查 Token 是否正确${NC}"
         echo -e "⬇️ 错误日志 (最后 10 行):"
         tail -n 10 cloudflared.log
-        echo -e "⬆️ 提示: 如果显示 'certificate' 错误，请检查 Token 是否复制完整。"
+        echo -e "⬆️ 提示: 如果显示 'DNS' 或 'lookup' 错误，这通常是 Termux 的 DNS 问题。"
+        echo -e "尝试切换 WiFi/流量，或运行 'termux-change-repo' 切换源可能会刷新网络配置。"
     fi
 }
 
@@ -196,14 +211,18 @@ start_bot() {
 
 # --- 菜单逻辑 ---
 
+# 提取第一个参数作为动作，如果没有则默认为 start
 ACTION=${1:-start}
-ARG_TOKEN=$2
+
+# 将第一个参数移出，$@ 现在包含剩余的所有参数 (可能是 Token)
+shift 2>/dev/null || true
 
 case "$ACTION" in
     start)
         check_packages
         check_cloudflared
-        if [ -f "$TOKEN_FILE" ]; then
+        # 只要本地有缓存 OR 脚本里有硬编码 Token，就自动启动隧道
+        if [ -f "$TOKEN_FILE" ] || [ -n "$FIXED_TOKEN" ]; then
             start_tunnel
         else
             echo -e "${YELLOW}提示: 未配置隧道。如需外网访问请使用 ./start_bot.sh tunnel <TOKEN>${NC}"
@@ -213,7 +232,8 @@ case "$ACTION" in
     tunnel)
         check_packages
         check_cloudflared
-        start_tunnel $ARG_TOKEN
+        # 将剩余所有参数传给 start_tunnel 以支持智能提取
+        start_tunnel "$@"
         start_bot
         ;;
     autostart)
@@ -233,9 +253,9 @@ case "$ACTION" in
         ;;
     *)
         echo "使用方法:"
-        echo "  ./start_bot.sh tunnel <TOKEN>   # 首次配置并启动"
-        echo "  ./start_bot.sh start            # 正常启动 (使用已保存配置)"
-        echo "  ./start_bot.sh autostart        # 配置开机自启 (需要 Termux:Boot)"
+        echo "  ./start_bot.sh                  # 一键启动 (自动读取内置Token)"
+        echo "  ./start_bot.sh tunnel <TOKEN>   # 手动更新 Token"
+        echo "  ./start_bot.sh autostart        # 配置开机自启"
         echo "  ./start_bot.sh log              # 查看日志"
         ;;
 esac
