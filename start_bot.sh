@@ -58,17 +58,29 @@ check_packages() {
 check_cloudflared() {
     echo -e "${YELLOW}[2/5] 检查 Cloudflare 组件...${NC}"
     
+    # 检测是否为伪造的/错误的二进制文件 (比如下载了404页面)
+    if [ -f "./cloudflared" ]; then
+        if head -n 1 ./cloudflared | grep -q "DOCTYPE"; then
+            echo -e "${RED}⚠️ 检测到 cloudflared 文件损坏 (可能是下载失败)，正在删除重试...${NC}"
+            rm ./cloudflared
+        fi
+    fi
+    
     if [ ! -f "./cloudflared" ]; then
         echo -e "${YELLOW}>> 下载 cloudflared...${NC}"
         ARCH=$(uname -m)
         case $ARCH in
             aarch64) CF_ARCH="arm64" ;;
+            armv7*) CF_ARCH="arm" ;;
             arm*) CF_ARCH="arm" ;;
             x86_64) CF_ARCH="amd64" ;;
             *) echo -e "${RED}不支持的架构: $ARCH${NC}"; return ;;
         esac
         
-        curl -L --output cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-android-$CF_ARCH"
+        # 修正：使用标准 Linux 构建 (Termux 兼容)，移除 -android 后缀
+        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$CF_ARCH"
+        echo -e "下载地址: $URL"
+        curl -L --output cloudflared "$URL"
         chmod +x cloudflared
     fi
 }
@@ -102,15 +114,18 @@ start_tunnel() {
     # 停止旧的进程
     pkill -f cloudflared > /dev/null 2>&1
     
-    # 后台启动
-    nohup ./cloudflared tunnel run --token $TOKEN > cloudflared.log 2>&1 &
+    # 后台启动 (不使用 service install，Termux 不支持)
+    # 添加 --no-autoupdate 防止自更新导致权限问题
+    nohup ./cloudflared tunnel --no-autoupdate run --token $TOKEN > cloudflared.log 2>&1 &
     
-    sleep 2
+    sleep 3
     if pgrep -f cloudflared > /dev/null; then
         echo -e "${GREEN}✅ 隧道运行中 (Cloudflare Tunnel)${NC}"
     else
         echo -e "${RED}⚠️ 隧道启动失败，请检查 Token 是否正确${NC}"
-        cat cloudflared.log
+        echo -e "⬇️ 错误日志 (最后 10 行):"
+        tail -n 10 cloudflared.log
+        echo -e "⬆️ 提示: 如果显示 'certificate' 错误，请检查 Token 是否复制完整。"
     fi
 }
 
