@@ -50,8 +50,9 @@ check_packages() {
     fi
     
     # 4. 检查 Python 依赖
-    if ! python -c "import telegram" &> /dev/null; then
-        echo -e "${YELLOW}>> 正在安装 Python 库...${NC}"
+    # 检查 httpx 是否支持 socks (关键修复)
+    if ! python -c "import httpx; print(httpx.__version__)" &> /dev/null || ! pip show httpx | grep -q "socks"; then
+        echo -e "${YELLOW}>> 正在安装/更新 Python 库 (含 socks 代理支持)...${NC}"
         pip install -r requirements.txt
     fi
 
@@ -228,10 +229,27 @@ start_bot() {
     pm2 start $BOT_FILE --name $PM2_NAME --interpreter python --no-autorestart
     pm2 save
     
-    echo -e "\n${GREEN}🎉 系统运行中！${NC}"
+    echo -e "\n${GREEN}🎉 系统后台运行中！${NC}"
     echo -e "-----------------------------------"
     echo -e "📡 远程 SSH 建议: 配合 Cloudflare Tunnel 配置 SSH 访问"
     echo -e "⚙️ 开机自启: ./start_bot.sh autostart"
+    echo -e "📝 查看日志: ./start_bot.sh log"
+}
+
+debug_bot() {
+    echo -e "${YELLOW}[DEBUG MODE] 正在以前台模式启动 Bot...${NC}"
+    echo -e "提示: 在此模式下，您可以看到所有报错信息。按 Ctrl+C 退出。"
+    echo -e "-----------------------------------"
+    
+    # 停止后台进程防止冲突
+    pm2 delete $PM2_NAME > /dev/null 2>&1
+    
+    if command -v termux-wake-lock &> /dev/null; then
+        termux-wake-lock
+    fi
+
+    # 直接运行 Python
+    python $BOT_FILE
 }
 
 # --- 菜单逻辑 ---
@@ -253,6 +271,10 @@ case "$ACTION" in
             echo -e "${YELLOW}提示: 未配置隧道。如需外网访问请使用 ./start_bot.sh tunnel <TOKEN>${NC}"
         fi
         start_bot
+        ;;
+    debug)
+        check_packages
+        debug_bot
         ;;
     tunnel)
         check_packages
@@ -279,6 +301,7 @@ case "$ACTION" in
     *)
         echo "使用方法:"
         echo "  ./start_bot.sh                  # 一键启动 (自动读取内置Token)"
+        echo "  ./start_bot.sh debug            # [推荐] 调试模式 (前台运行查看报错)"
         echo "  ./start_bot.sh tunnel <TOKEN>   # 手动更新 Token"
         echo "  ./start_bot.sh autostart        # 配置开机自启"
         echo "  ./start_bot.sh log              # 查看日志"

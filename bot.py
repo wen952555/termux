@@ -1,6 +1,9 @@
+import asyncio
+import sys
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.request import HTTPXRequest
+from telegram.error import NetworkError, InvalidToken
 
 # Import Modules
 from bot_modules.config import BOT_TOKEN, logger, PROXY_URL, ADMIN_ID
@@ -21,6 +24,8 @@ MENU_KEYBOARD = [
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"收到 /start 指令，来自用户: {user_id}")
+    
     if not check_admin(user_id):
         logger.warning(f"Unauthorized start attempt from {user_id}")
         await update.message.reply_text(
@@ -41,10 +46,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not check_admin(user_id):
-        await update.message.reply_text(f"⛔️ 未授权 (您的 ID: {user_id})")
         return
 
     text = update.message.text
+    logger.info(f"收到指令: {text}")
     
     # Routing
     if text == "📊 系统状态": await system_status(update, context)
@@ -59,22 +64,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("使用 `/exec <命令>` 执行任意 Shell 指令。\n例如: `/exec ls -lh`")
     elif text == "💀 进程管理": await show_processes(update, context) # Hidden command
 
+async def check_connectivity(app):
+    """启动前自检网络"""
+    print("⏳ 正在测试 Telegram API 连接...")
+    try:
+        me = await app.bot.get_me()
+        print(f"✅ 连接成功! Bot 信息: @{me.username} (ID: {me.id})")
+        print(f"✅ 管理员 ID: {ADMIN_ID}")
+    except InvalidToken:
+        print("❌ 错误: Bot Token 无效！请检查 bot_modules/config.py")
+        sys.exit(1)
+    except NetworkError as e:
+        print(f"❌ 网络错误: 无法连接到 Telegram 服务器。")
+        print(f"🔍 调试信息: {e}")
+        print(f"🌐 当前代理配置: {PROXY_URL or '无 (直连)'}")
+        print("💡 提示: 请检查 VPN/代理 是否开启，或者尝试配置 http_proxy 环境变量。")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ 未知错误: {e}")
+        sys.exit(1)
+
 def main():
+    print("🚀 正在初始化 Bot...")
+
     # 1. 配置网络请求 (代理支持)
-    request = None
+    # 增加连接超时和读取超时，防止因网络慢而“假死”
+    request_kwargs = {
+        'connect_timeout': 10.0,
+        'read_timeout': 10.0,
+    }
+    
     if PROXY_URL:
-        print(f"🌐 检测到代理配置: {PROXY_URL}")
-        request = HTTPXRequest(proxy_url=PROXY_URL)
+        print(f"🌐 使用代理: {PROXY_URL}")
+        request_kwargs['proxy_url'] = PROXY_URL
     else:
-        print("ℹ️ 未检测到代理环境变量 (http_proxy)。如果连接失败，请配置代理。")
+        print("ℹ️ 未检测到代理 (http_proxy)。尝试直连...")
+
+    request = HTTPXRequest(**request_kwargs)
 
     # 2. 构建应用
-    builder = ApplicationBuilder().token(BOT_TOKEN)
-    if request:
+    try:
+        builder = ApplicationBuilder().token(BOT_TOKEN)
         builder.request(request)
-    
-    app = builder.build()
-    
+        app = builder.build()
+    except Exception as e:
+        print(f"❌ 初始化失败: {e}")
+        return
+
+    # 3. 运行连接自检 (在主事件循环之前)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(check_connectivity(app))
+
     # Command Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("exec", exec_command))
@@ -91,10 +132,7 @@ def main():
     # Error Handler
     app.add_error_handler(error_handler)
 
-    print(f"✅ Bot 启动成功！正在等待消息...")
-    if PROXY_URL:
-        print(f"📡 代理模式运行中 -> {PROXY_URL}")
-        
+    print(f"🎉 Bot 主程序已启动，正在轮询消息...")
     app.run_polling()
 
 if __name__ == '__main__':
