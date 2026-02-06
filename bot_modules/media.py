@@ -1,123 +1,156 @@
 import os
 import asyncio
 import subprocess
-import glob
+import json
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from .config import MEDIA_DIR, logger
-from .utils import clean_device, send_toast, check_admin
+from .utils import clean_device, send_toast
+
+async def check_camera_available():
+    """检查摄像头是否可用"""
+    try:
+        # 尝试直接命令
+        cmd = "termux-camera-info"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+        
+        # 兼容 PRoot 环境，尝试绝对路径
+        if result.returncode != 0 or not result.stdout.strip():
+            cmd = "/data/data/com.termux/files/usr/bin/termux-camera-info"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+
+        if result.returncode == 0:
+            cameras = json.loads(result.stdout)
+            if isinstance(cameras, list) and len(cameras) > 0:
+                return True, f"检测到 {len(cameras)} 个摄像头"
+            else:
+                return False, "摄像头列表为空 (API 返回 [])"
+        else:
+            return False, f"无法执行 camera-info: {result.stderr}"
+    except Exception as e:
+        return False, str(e)
 
 async def capture_media(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type):
     chat_id = update.effective_chat.id
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # 1. 强力清理设备占用 (防止上一次录制未退出)
+    # 1. 强力清理设备占用
     await clean_device()
-    await asyncio.sleep(1) # 使用异步等待
+    await asyncio.sleep(1)
     
     filename = ""
     msg = ""
+    cmd = ""
+    
+    # 2. 诊断摄像头 (仅视频/照片)
+    if media_type in ["photo", "video"]:
+        available, info = await check_camera_available()
+        if not available:
+            await update.message.reply_text(
+                f"❌ **无法调用摄像头**\n"
+                f"诊断信息: {info}\n\n"
+                f"**解决方案:**\n"
+                f"1. 确保安装了 `Termux:API` App 并在系统中授予其相机权限。\n"
+                f"2. 确保 `Termux` App 也拥有相机权限。\n"
+                f"3. 尝试重启手机。"
+            , parse_mode='Markdown')
+            return
     
     if media_type == "photo":
         filename = os.path.join(MEDIA_DIR, f"img_{timestamp}.jpg")
-        cmd = f"termux-camera-photo -c 0 {filename}"
+        # 自动选择摄像头
+        cmd = f"termux-camera-photo {filename}"
         msg = "📸 正在拍照..."
         
     elif media_type == "video":
         filename = os.path.join(MEDIA_DIR, f"vid_{timestamp}.mp4")
-        # 视频不再使用 -l 限制，改为手动开始和停止
-        start_cmd = f"termux-camera-record -c 0 {filename}"
-        stop_cmd = "termux-camera-record -q"
+        # Android 7.1.1 建议使用 -l 限制时长，比手动停止更稳定
+        # -c 0 使用后置摄像头 (通常 ID 0 是后置)
+        cmd = f"termux-camera-record -l 30 {filename}"
         msg = "📹 正在启动录制 (30秒)..."
         
     else:
         filename = os.path.join(MEDIA_DIR, f"rec_{timestamp}.m4a")
-        # 音频不再使用 -l 限制，改为手动开始和停止
-        start_cmd = f"termux-microphone-record -f {filename}"
-        stop_cmd = "termux-microphone-record -q"
+        # 音频使用 -l 限制
+        cmd = f"termux-microphone-record -l 30 -f {filename}"
         msg = "🎤 正在启动录音 (30秒)..."
 
     status_msg = await update.message.reply_text(msg)
     
     try:
+        # 执行命令
+        # 注意: termux-camera-record -l 在旧版 API 中可能是阻塞的，也可能是非阻塞的。
+        # 为保险起见，我们使用 subprocess.Popen 并在 Python 端等待。
+        
+        logger.info(f"Running: {cmd}")
+        
         if media_type == "photo":
-            # 拍照是瞬间动作，直接运行
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                raise Exception(f"命令执行错误: {result.stderr}")
+             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+             if result.returncode != 0:
+                 raise Exception(f"命令返回错误: {result.stderr}")
         else:
-            # 录音和录像：采用 "启动 -> 等待 -> 停止" 模式
-            # 1. 启动进程 (不等待它结束)
-            process = subprocess.Popen(start_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # 对于视频/音频，给予 35 秒超时 (录制 30秒 + 缓冲)
+            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             
-            # 2. 异步等待 30 秒 (期间 Bot 可以响应其他消息)
-            await asyncio.sleep(30)
-            
-            # 3. 发送停止信号
-            subprocess.run(stop_cmd, shell=True, capture_output=True)
-            
-            # 4. 确保进程结束
-            process.terminate()
+            # 轮询检查进程是否过早退出 (3秒内退出通常意味着失败)
             try:
-                process.wait(timeout=2)
+                code = process.wait(timeout=3)
+                # 如果能在 3秒内返回，说明要么瞬间完成(不可能)，要么瞬间失败
+                err = process.stderr.read()
+                if code != 0:
+                    raise Exception(f"启动失败 (Exit {code}): {err}")
             except subprocess.TimeoutExpired:
-                process.kill()
+                # 进程正在运行，这很好。
+                # 我们等待剩余时间 (例如 28秒)
+                await asyncio.sleep(28)
+                
+                # 再次检查是否结束
+                if process.poll() is None:
+                    # 如果还没结束（可能 -l 参数无效），手动停止
+                    await clean_device()
+                    process.terminate()
 
-        # 检查文件结果
-        file_exists = os.path.exists(filename) and os.path.getsize(filename) > 0
-        
-        if not file_exists:
-            # 错误分析
-            error_hint = "未知错误"
-            if media_type == "video":
-                error_hint = "Android 11+ 系统限制严格，后台调用录像极易失败。请尝试保持 Termux 前台亮屏运行，或改用拍照功能。"
+        # 检查文件
+        if os.path.exists(filename) and os.path.getsize(filename) > 0:
+            await status_msg.edit_text("📤 上传中...")
+            with open(filename, 'rb') as f:
+                if media_type == "photo": await context.bot.send_photo(chat_id, f)
+                elif media_type == "video": await context.bot.send_video(chat_id, f)
+                else: await context.bot.send_audio(chat_id, f)
             
-            await status_msg.edit_text(
-                f"❌ **{media_type} 录制失败**\n"
-                f"未生成文件。可能原因：\n"
-                f"1. 权限被拒绝 (请在手机设置授予 Termux 权限)\n"
-                f"2. 设备硬件被占用\n"
-                f"3. {error_hint}"
-            )
-            return
+            await status_msg.delete()
+            await send_toast(f"Captured {media_type}")
+        else:
+            raise Exception("文件未生成或大小为0")
 
-        # 3. 成功上传
-        await status_msg.edit_text("📤 录制完成，正在上传...")
-        
-        with open(filename, 'rb') as f:
-            if media_type == "photo":
-                await context.bot.send_photo(chat_id, f)
-            elif media_type == "video":
-                await context.bot.send_video(chat_id, f)
-            else:
-                await context.bot.send_audio(chat_id, f)
-        
-        await status_msg.delete()
-        await send_toast(f"Bot: Captured {media_type}")
-        
     except Exception as e:
         await clean_device()
-        logger.error(f"Media capture error: {e}")
-        await status_msg.edit_text(f"❌ 执行出错: {str(e)}")
+        logger.error(f"Media error: {e}")
+        
+        # 针对 Android 7.1.1 的特定提示
+        tip = ""
+        if "启动失败" in str(e) or "文件未生成" in str(e):
+            tip = "\n\n💡 **Termux (Android 7) 提示:**\n1. 请检查 Termux:API APP 是否已安装且授予权限。\n2. 尝试在 Termux 终端手动运行 `termux-camera-record test.mp4` 看看是否报错。"
+            
+        await status_msg.edit_text(f"❌ **录制失败**\n错误信息: {str(e)}{tip}", parse_mode='Markdown')
 
 async def play_received_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """下载并播放用户发送的音频"""
-    if not check_admin(update.effective_user.id): return
+    if not update.effective_user or not check_admin(update.effective_user.id): return
 
     msg = await update.message.reply_text("📥 正在下载音频...")
     
     try:
         # 1. 获取文件对象
         file_obj = None
-        ext = ".ogg" # 默认语音消息格式
+        ext = ".ogg" 
         
         if update.message.voice:
             file_obj = await update.message.voice.get_file()
             ext = ".ogg"
         elif update.message.audio:
             file_obj = await update.message.audio.get_file()
-            # 尝试获取原始扩展名，如果没有则默认mp3
             if update.message.audio.file_name:
                 _, ext = os.path.splitext(update.message.audio.file_name)
             else:
@@ -135,25 +168,30 @@ async def play_received_audio(update: Update, context: ContextTypes.DEFAULT_TYPE
         await file_obj.download_to_drive(filepath)
         
         # 3. 调用 Termux 播放
-        await msg.edit_text("▶️ 正在 Termux 上播放...")
+        await msg.edit_text("▶️ 正在播放...")
         
-        # 使用 termux-media-player play <file>
-        cmd = f"termux-media-player play '{filepath}'"
+        # 尝试多种播放命令
+        cmds = [
+            f"termux-media-player play '{filepath}'",
+            f"play-audio '{filepath}'",
+            f"/data/data/com.termux/files/usr/bin/termux-media-player play '{filepath}'"
+        ]
         
-        # 执行命令
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        success = False
+        last_err = ""
         
-        if proc.returncode == 0:
-            await msg.edit_text(f"✅ 播放请求已发送\n📄 文件: `{filename}`")
-            await send_toast(f"Playing: {filename}")
+        for cmd in cmds:
+            p = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if p.returncode == 0:
+                success = True
+                break
+            last_err = p.stderr
+
+        if success:
+            await msg.edit_text(f"✅ 播放成功\n📄 `{filename}`", parse_mode='Markdown')
+            await send_toast(f"Playing {filename}")
         else:
-            # 尝试备用命令 play-audio
-            cmd_alt = f"play-audio '{filepath}'"
-            proc_alt = subprocess.run(cmd_alt, shell=True, capture_output=True, text=True)
-            if proc_alt.returncode == 0:
-                 await msg.edit_text(f"✅ 播放成功 (play-audio)\n📄 文件: `{filename}`")
-            else:
-                 await msg.edit_text(f"❌ 播放失败。请确保安装了 termux-api。\n错误: {proc.stderr}")
+             await msg.edit_text(f"❌ 播放失败 (尝试了多种方法)\n错误: {last_err}")
 
     except Exception as e:
         logger.error(f"Play audio error: {e}")
@@ -162,7 +200,6 @@ async def play_received_audio(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cleanup_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🗑 清理中...")
     try:
-        # 增加清理 .ogg 和 .mp3
         patterns = ["*.jpg", "*.mp4", "*.m4a", "*.ogg", "*.mp3", "*.wav"]
         count = 0
         for pat in patterns:
