@@ -33,13 +33,43 @@ async def toggle_torch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- IP CHECK ---
 
+def get_real_local_ip():
+    """
+    使用 UDP 连接技巧获取真实路由 IP (不会实际发送数据)。
+    这比 socket.gethostname() 在 Termux 上准确得多。
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # 连接 Google DNS (不需要实际可达)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 async def check_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🌐 正在查询网络信息...")
     try:
-        local_ip = socket.gethostbyname(socket.gethostname())
-        # Use a reliable external service
-        public_ip = subprocess.check_output("curl -s ifconfig.me", shell=True, timeout=5).decode().strip()
-        text = f"🌐 **网络概览**\n\n🏠 **内网 IP**: `{local_ip}`\n🌍 **公网 IP**: `{public_ip}`"
+        # 1. 获取内网 IP (优化版)
+        local_ip = get_real_local_ip()
+        
+        # 2. 获取公网 IP (使用 curl，带超时)
+        # 尝试 ipinfo.io/ip 或 ifconfig.me
+        cmd = "curl -s --max-time 5 ifconfig.me"
+        try:
+            public_ip = subprocess.check_output(cmd, shell=True).decode().strip()
+        except subprocess.CalledProcessError:
+            public_ip = "查询超时"
+
+        text = (
+            f"🌐 **网络概览**\n"
+            f"────────────────\n"
+            f"🏠 **内网 IP**: `{local_ip}`\n"
+            f"   └用于: 局域网 SSH 连接\n\n"
+            f"🌍 **公网 IP**: `{public_ip}`\n"
+            f"   └用于: 检查 VPN/代理状态"
+        )
         await msg.edit_text(text, parse_mode='Markdown')
     except Exception as e:
         await msg.edit_text(f"❌ 查询失败: {e}")

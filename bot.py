@@ -9,15 +9,18 @@ from telegram.error import NetworkError, InvalidToken
 from bot_modules.config import BOT_TOKEN, logger, PROXY_URL, ADMIN_ID
 from bot_modules.utils import check_admin, error_handler
 from bot_modules.system import system_status, show_processes, handle_process_callback, force_update
-from bot_modules.media import capture_media, cleanup_media, play_received_audio, stop_playback_callback
+from bot_modules.media import (
+    capture_media, cleanup_media, play_received_audio, stop_playback_callback,
+    list_audio_files, handle_audio_selection, handle_loop_callback
+)
 from bot_modules.tools import toggle_torch, check_ip, exec_command
 
 # --- MENU LAYOUT ---
 MENU_KEYBOARD = [
-    [KeyboardButton("📊 系统状态"), KeyboardButton("🗑 清理媒体")],
+    [KeyboardButton("📊 系统状态"), KeyboardButton("🎵 播放列表")],
     [KeyboardButton("📸 拍摄照片"), KeyboardButton("🔦 手电筒")],
     [KeyboardButton("💥 连拍模式"), KeyboardButton("🎤 录制音频")],
-    [KeyboardButton("🌐 公网 IP"), KeyboardButton("🔄 强制更新")]
+    [KeyboardButton("🌐 公网 IP"), KeyboardButton("🗑 清理媒体")]
 ]
 
 # --- MAIN DISPATCHER ---
@@ -56,6 +59,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🗑 清理媒体": await cleanup_media(update, context)
     elif text == "🔄 强制更新": await force_update(update, context)
     elif text == "📸 拍摄照片": await capture_media(update, context, "photo")
+    elif text == "🎵 播放列表": await list_audio_files(update, context)
     
     # 兼容旧菜单的 "录制视频" 按钮，将其导向连拍模式
     elif text == "💥 连拍模式" or text == "📹 录制视频": 
@@ -136,6 +140,8 @@ def main():
     # Callback Handlers
     app.add_handler(CallbackQueryHandler(handle_process_callback, pattern="^(kill:|refresh_ps)"))
     app.add_handler(CallbackQueryHandler(stop_playback_callback, pattern="^media_stop"))
+    app.add_handler(CallbackQueryHandler(handle_audio_selection, pattern="^sel_audio:"))
+    app.add_handler(CallbackQueryHandler(handle_loop_callback, pattern="^play_loop:"))
 
     # Error Handler
     app.add_error_handler(error_handler)
