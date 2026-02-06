@@ -17,7 +17,7 @@ TOKEN_FILE=".tunnel_token"
 BOOT_DIR="$HOME/.termux/boot"
 PREFIX_DIR="/data/data/com.termux/files/usr"
 
-echo -e "${GREEN}=== Termux 自动修复与启动脚本 ===${NC}"
+echo -e "${GREEN}=== Termux 自动修复与启动脚本 (Proot 增强版) ===${NC}"
 
 # --- 1. 基础依赖修复 ---
 
@@ -30,26 +30,32 @@ check_packages() {
         exit 1
     fi
 
-    # 自动修复 termux-api (防止被系统误删)
+    # 1. 自动修复 termux-api
     if ! command -v termux-camera-record &> /dev/null; then
         echo -e "${YELLOW}>> 正在恢复 termux-api...${NC}"
         pkg update -y -o Dpkg::Options::="--force-confnew"
         pkg install termux-api -y
     fi
 
-    # 检查 Python 环境
+    # 2. 检查 Python 环境
     if ! command -v python &> /dev/null; then
         echo -e "${YELLOW}>> 正在安装 Python...${NC}"
         pkg install python -y
     fi
     
-    # 检查 Python 依赖
+    # 3. 检查 Proot (用于解决 Cloudflare DNS 问题)
+    if ! command -v termux-chroot &> /dev/null; then
+        echo -e "${YELLOW}>> 正在安装 Proot 环境 (用于修复网络)...${NC}"
+        pkg install proot -y
+    fi
+    
+    # 4. 检查 Python 依赖
     if ! python -c "import telegram" &> /dev/null; then
         echo -e "${YELLOW}>> 正在安装 Python 库...${NC}"
         pip install -r requirements.txt
     fi
 
-    # 检查 PM2
+    # 5. 检查 PM2
     if ! command -v pm2 &> /dev/null; then
         echo -e "${YELLOW}>> 正在安装 PM2...${NC}"
         if ! command -v npm &> /dev/null; then
@@ -64,10 +70,9 @@ check_packages() {
 check_cloudflared() {
     echo -e "${YELLOW}[2/5] 检查 Cloudflare 组件...${NC}"
     
-    # 检测是否为伪造的/错误的二进制文件 (比如下载了404页面)
+    # 检测是否为伪造的/错误的二进制文件
     if [ -f "./cloudflared" ]; then
         if head -n 1 ./cloudflared | grep -q "DOCTYPE"; then
-            echo -e "${RED}⚠️ 检测到 cloudflared 文件损坏 (可能是下载失败)，正在删除重试...${NC}"
             rm ./cloudflared
         fi
     fi
@@ -103,10 +108,10 @@ fix_dns() {
     fi
 
     # 强制写入 Google 和 Cloudflare 的 IPv4 DNS
-    # 解决 [::1]:53 connection refused 问题
+    # 配合 termux-chroot，cloudflared 将能在 /etc/resolv.conf 找到这个文件
     echo "nameserver 8.8.8.8" > "$RESOLV_CONF"
     echo "nameserver 1.1.1.1" >> "$RESOLV_CONF"
-    echo -e "${GREEN}✅ DNS 已重置为 8.8.8.8 (解决 IPv6 连接报错)${NC}"
+    echo -e "${GREEN}✅ DNS 已重置为 8.8.8.8${NC}"
 }
 
 # --- 3. 启动隧道 ---
@@ -122,13 +127,12 @@ start_tunnel() {
     
     if [ -n "$EXTRACTED_TOKEN" ]; then
         TOKEN="$EXTRACTED_TOKEN"
-        echo "$TOKEN" > "$TOKEN_FILE" # 更新本地缓存
+        echo "$TOKEN" > "$TOKEN_FILE"
         echo -e "${GREEN}✅ 已识别并更新 Tunnel Token${NC}"
     elif [ -f "$TOKEN_FILE" ]; then
         TOKEN=$(cat "$TOKEN_FILE")
     fi
 
-    # 如果上述都没找到，使用硬编码的
     if [ -z "$TOKEN" ] && [ -n "$FIXED_TOKEN" ]; then
         TOKEN="$FIXED_TOKEN"
         echo -e "${GREEN}✅ 使用脚本内置 Token${NC}"
@@ -143,26 +147,25 @@ start_tunnel() {
 
     echo -e "${YELLOW}[3/5] 启动 Cloudflare 隧道...${NC}"
     
-    # 先修复 DNS
+    # 修复 DNS
     fix_dns
 
     # 停止旧的进程
     pkill -f cloudflared > /dev/null 2>&1
     
-    # 后台启动
-    # --no-autoupdate: 禁止自动更新
-    # --edge-ip-version 4: 强制使用 IPv4 (解决部分 Android DNS 解析到 ::1 的问题)
-    # --protocol http2: 使用 HTTP2 协议 (比 QUIC 更稳定)
-    nohup ./cloudflared tunnel --no-autoupdate --edge-ip-version 4 --protocol http2 run --token $TOKEN > cloudflared.log 2>&1 &
+    # 核心修改：使用 termux-chroot 启动
+    # 这会创建虚拟根目录，让程序能找到 /etc/resolv.conf
+    echo -e "${GREEN}⚡ 正在使用 termux-chroot 模式启动隧道...${NC}"
+    
+    nohup termux-chroot ./cloudflared tunnel --no-autoupdate --edge-ip-version 4 --protocol http2 run --token $TOKEN > cloudflared.log 2>&1 &
     
     sleep 5
     if pgrep -f cloudflared > /dev/null; then
-        echo -e "${GREEN}✅ 隧道运行中 (Cloudflare Tunnel)${NC}"
+        echo -e "${GREEN}✅ 隧道启动成功 (Cloudflare Tunnel)${NC}"
     else
-        echo -e "${RED}⚠️ 隧道启动失败，请检查 Token 是否正确${NC}"
+        echo -e "${RED}⚠️ 隧道启动失败，请检查 Token${NC}"
         echo -e "⬇️ 错误日志 (最后 10 行):"
         tail -n 10 cloudflared.log
-        echo -e "⬆️ 提示: DNS 已重置，如果依然失败，请检查 Token 是否已失效 (重新生成)。"
     fi
 }
 
@@ -198,6 +201,7 @@ sleep 10
 
 # 3. 进入项目目录并启动
 cd "$PROJECT_DIR"
+# start 参数会自动处理依赖和隧道
 ./start_bot.sh start >> boot.log 2>&1
 EOF
 
@@ -215,7 +219,6 @@ EOF
 start_bot() {
     echo -e "${YELLOW}[4/5] 启动 Bot...${NC}"
     
-    # 尝试申请唤醒锁
     if command -v termux-wake-lock &> /dev/null; then
         termux-wake-lock
         echo -e "已申请 Wake Lock (防止休眠)"
