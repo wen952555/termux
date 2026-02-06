@@ -15,6 +15,7 @@ BOT_FILE="bot.py"
 PM2_NAME="termux-bot"
 TOKEN_FILE=".tunnel_token"
 BOOT_DIR="$HOME/.termux/boot"
+PREFIX_DIR="/data/data/com.termux/files/usr"
 
 echo -e "${GREEN}=== Termux 自动修复与启动脚本 ===${NC}"
 
@@ -90,6 +91,24 @@ check_cloudflared() {
     fi
 }
 
+# --- 2.5 DNS 强力修复 (关键步骤) ---
+
+fix_dns() {
+    echo -e "${YELLOW}[2.5] 修复 DNS 配置...${NC}"
+    RESOLV_CONF="$PREFIX_DIR/etc/resolv.conf"
+    
+    # 备份原 DNS 配置
+    if [ ! -f "${RESOLV_CONF}.bak" ]; then
+        cp "$RESOLV_CONF" "${RESOLV_CONF}.bak" 2>/dev/null
+    fi
+
+    # 强制写入 Google 和 Cloudflare 的 IPv4 DNS
+    # 解决 [::1]:53 connection refused 问题
+    echo "nameserver 8.8.8.8" > "$RESOLV_CONF"
+    echo "nameserver 1.1.1.1" >> "$RESOLV_CONF"
+    echo -e "${GREEN}✅ DNS 已重置为 8.8.8.8 (解决 IPv6 连接报错)${NC}"
+}
+
 # --- 3. 启动隧道 ---
 
 start_tunnel() {
@@ -123,6 +142,10 @@ start_tunnel() {
     fi
 
     echo -e "${YELLOW}[3/5] 启动 Cloudflare 隧道...${NC}"
+    
+    # 先修复 DNS
+    fix_dns
+
     # 停止旧的进程
     pkill -f cloudflared > /dev/null 2>&1
     
@@ -139,8 +162,7 @@ start_tunnel() {
         echo -e "${RED}⚠️ 隧道启动失败，请检查 Token 是否正确${NC}"
         echo -e "⬇️ 错误日志 (最后 10 行):"
         tail -n 10 cloudflared.log
-        echo -e "⬆️ 提示: 如果显示 'DNS' 或 'lookup' 错误，这通常是 Termux 的 DNS 问题。"
-        echo -e "尝试切换 WiFi/流量，或运行 'termux-change-repo' 切换源可能会刷新网络配置。"
+        echo -e "⬆️ 提示: DNS 已重置，如果依然失败，请检查 Token 是否已失效 (重新生成)。"
     fi
 }
 
