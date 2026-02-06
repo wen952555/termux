@@ -9,14 +9,14 @@ from telegram.error import NetworkError, InvalidToken
 from bot_modules.config import BOT_TOKEN, logger, PROXY_URL, ADMIN_ID
 from bot_modules.utils import check_admin, error_handler
 from bot_modules.system import system_status, show_processes, handle_process_callback, force_update
-from bot_modules.media import capture_media, cleanup_media, play_received_audio
-from bot_modules.tools import show_torch_menu, handle_torch_callback, check_ip, exec_command
+from bot_modules.media import capture_media, cleanup_media, play_received_audio, stop_playback_callback
+from bot_modules.tools import toggle_torch, check_ip, exec_command
 
 # --- MENU LAYOUT ---
 MENU_KEYBOARD = [
     [KeyboardButton("📊 系统状态"), KeyboardButton("🗑 清理媒体")],
     [KeyboardButton("📸 拍摄照片"), KeyboardButton("🔦 手电筒")],
-    [KeyboardButton("📹 录制视频"), KeyboardButton("🎤 录制音频")],
+    [KeyboardButton("💥 连拍模式"), KeyboardButton("🎤 录制音频")],
     [KeyboardButton("🌐 公网 IP"), KeyboardButton("🔄 强制更新")]
 ]
 
@@ -56,9 +56,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🗑 清理媒体": await cleanup_media(update, context)
     elif text == "🔄 强制更新": await force_update(update, context)
     elif text == "📸 拍摄照片": await capture_media(update, context, "photo")
-    elif text == "📹 录制视频": await capture_media(update, context, "video")
+    elif text == "💥 连拍模式": await capture_media(update, context, "burst") # Changed from video
     elif text == "🎤 录制音频": await capture_media(update, context, "audio")
-    elif text == "🔦 手电筒": await show_torch_menu(update, context)
+    elif text == "🔦 手电筒": await toggle_torch(update, context)
     elif text == "🌐 公网 IP": await check_ip(update, context)
     elif text == "💻 终端命令":
         await update.message.reply_text("使用 `/exec <命令>` 执行任意 Shell 指令。\n例如: `/exec ls -lh`")
@@ -88,7 +88,6 @@ def main():
     print("🚀 正在初始化 Bot...")
 
     # 1. 配置网络请求 (代理支持)
-    # 增加连接超时和读取超时，防止因网络慢而“假死”
     request_kwargs = {
         'connect_timeout': 10.0,
         'read_timeout': 10.0,
@@ -127,7 +126,7 @@ def main():
     
     # Callback Handlers
     app.add_handler(CallbackQueryHandler(handle_process_callback, pattern="^(kill:|refresh_ps)"))
-    app.add_handler(CallbackQueryHandler(handle_torch_callback, pattern="^torch:"))
+    app.add_handler(CallbackQueryHandler(stop_playback_callback, pattern="^media_stop"))
 
     # Error Handler
     app.add_error_handler(error_handler)

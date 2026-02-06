@@ -1,31 +1,35 @@
 import subprocess
 import socket
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes
 from .utils import check_admin
 
 # --- FLASHLIGHT ---
 
-async def show_torch_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🔦 开启", callback_data="torch:on"), 
-         InlineKeyboardButton("🌑 关闭", callback_data="torch:off")]
-    ]
-    await update.message.reply_text("💡 **手电筒控制**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+# 全局变量追踪状态 (默认为关)
+TORCH_STATE = False
 
-async def handle_torch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    action = query.data.split(":")[1]
+async def toggle_torch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global TORCH_STATE
+    
+    # 切换状态
+    TORCH_STATE = not TORCH_STATE
+    action = "on" if TORCH_STATE else "off"
     
     cmd = f"termux-torch {action}"
     alt = f"/data/data/com.termux/files/usr/bin/termux-torch {action}"
     
     try:
+        # 执行命令 (不检查返回值，因为 termux-torch 有时无输出)
         subprocess.run(f"{cmd} || {alt}", shell=True)
-        state_text = "已开启" if action == "on" else "已关闭"
-        await query.answer(f"手电筒{state_text}")
+        
+        status_msg = "💡 手电筒已开启" if TORCH_STATE else "🌑 手电筒已关闭"
+        await update.message.reply_text(status_msg)
+        
     except Exception as e:
-        await query.answer(f"执行失败: {e}", show_alert=True)
+        # 失败回滚状态
+        TORCH_STATE = not TORCH_STATE
+        await update.message.reply_text(f"❌ 执行失败: {e}")
 
 # --- IP CHECK ---
 
