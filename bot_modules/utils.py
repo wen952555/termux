@@ -1,6 +1,11 @@
 import subprocess
 import shutil
 import os
+import traceback
+import html
+import json
+from telegram import Update
+from telegram.ext import ContextTypes
 from .config import ADMIN_ID, logger
 
 def get_executable_path(cmd_name):
@@ -45,3 +50,27 @@ async def clean_device():
         subprocess.run("pkill -9 termux-micro", shell=True, stderr=subprocess.DEVNULL)
     except: 
         pass
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+
+    update_str = update.to_dict() if isinstance(update, Update) else str(update)
+    
+    message = (
+        f"⚠️ <b>Bot Error Report</b>\n\n"
+        f"<pre>{html.escape(tb_string[-3000:])}</pre>"
+    )
+
+    try:
+        if context.bot:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID, 
+                text=message, 
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"Failed to send error message: {e}")

@@ -6,7 +6,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from .config import MEDIA_DIR, logger
-from .utils import clean_device, send_toast, get_executable_path
+from .utils import clean_device, send_toast, get_executable_path, check_admin
 
 async def check_camera_available():
     """检查摄像头是否可用"""
